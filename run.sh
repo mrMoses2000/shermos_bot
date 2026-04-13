@@ -200,27 +200,9 @@ step "Step 5: Database migrations"
 
 PG_USER=$(env_val "POSTGRES_USER")
 PG_DB=$(env_val "POSTGRES_DB")
-PG_PASS=$(env_val "POSTGRES_PASSWORD")
 
-# Create DB user if not exists (ignore error if already exists)
-$DC exec -T postgres psql -U postgres -c \
-    "DO \$\$ BEGIN
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${PG_USER}') THEN
-            CREATE ROLE ${PG_USER} WITH LOGIN PASSWORD '${PG_PASS}';
-        END IF;
-    END \$\$;" 2>/dev/null || true
-
-# Create database if not exists
-$DC exec -T postgres psql -U postgres -c \
-    "SELECT 1 FROM pg_database WHERE datname = '${PG_DB}'" 2>/dev/null | grep -q 1 \
-    || $DC exec -T postgres psql -U postgres -c \
-        "CREATE DATABASE ${PG_DB} OWNER ${PG_USER};" 2>/dev/null
-
-# Grant privileges
-$DC exec -T postgres psql -U postgres -c \
-    "GRANT ALL PRIVILEGES ON DATABASE ${PG_DB} TO ${PG_USER};" 2>/dev/null || true
-
-# Run migrations (all are idempotent with IF NOT EXISTS)
+# POSTGRES_USER is the superuser on Alpine images — DB and user already exist.
+# Just run migrations directly.
 for f in migrations/*.sql; do
     fname=$(basename "$f")
     $DC exec -T postgres psql -U "$PG_USER" -d "$PG_DB" < "$f" >/dev/null 2>&1
