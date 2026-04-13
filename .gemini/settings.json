@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/schemas/settings.schema.json",
+  "model": {
+    "name": "gemini-3-flash-preview"
+  },
+  "excludeTools": [
+    "run_shell_command",
+    "write_file",
+    "replace",
+    "web_fetch",
+    "google_web_search"
+  ]
+}

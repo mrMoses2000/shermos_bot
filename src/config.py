@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
+    gemini_model: str = "gemini-3-flash-preview"
     llm_cli_command: str = "gemini"
     llm_cli_flags: str = "-p"
     max_llm_concurrency: int = 2

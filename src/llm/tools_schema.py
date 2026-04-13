@@ -1,49 +1,53 @@
-"""Tool definitions included in the Gemini system prompt."""
+"""Tool definitions included in the Gemini system prompt.
+
+These definitions tell Gemini what actions it can take and what parameters
+each action requires. The descriptions guide the model to fill JSON correctly.
+"""
 
 
 def get_tools_schema() -> str:
     return """
-Доступные действия:
+Доступные действия (заполняй в поле "actions" JSON-ответа):
 
-1. render_partition
-   Назначение: создать 3D-рендер стеклянной перегородки и расчет стоимости.
-   Параметры:
+1. render_partition — создать 3D-рендер и расчёт стоимости
+   ОБЯЗАТЕЛЬНЫЕ параметры:
    - shape: "Прямая" | "Г-образная" | "П-образная"
-   - height: число, метры
-   - width_a: число, метры
-   - width_b: число, метры, требуется для Г-образной и П-образной
-   - width_c: число, метры, требуется для П-образной
-   - glass_type: "1" | "2" | "3" | "4"
-   - frame_color: "1" | "2" | "3" | "4" | "5"
-   - rows: целое число
-   - cols: целое число
-   - frame_thickness: число, метры
-   - add_handle: boolean
+   - height: число (метры, от 0.5 до 5.0)
+   - width_a: число (метры, от 0.3 до 10.0)
+   - glass_type: "1" | "2" | "3" | "4" (номер типа стекла)
+   - frame_color: "1" | "2" | "3" | "4" | "5" (номер цвета профиля)
+   - rows: целое число (по умолчанию 1)
+   - cols: целое число (по умолчанию 2)
+   УСЛОВНО-ОБЯЗАТЕЛЬНЫЕ:
+   - width_b: число (метры, ОБЯЗАТЕЛЕН для Г-образной и П-образной)
+   - width_c: число (метры, ОБЯЗАТЕЛЕН для П-образной)
+   ОПЦИОНАЛЬНЫЕ (заполняй если клиент указал):
+   - frame_thickness: число (метры, по умолч. 0.04)
+   - add_handle: true/false (по умолч. false)
    - handle_style: "Современный" | "Классический"
    - handle_position: "Лево" | "Центр" | "Право"
-   - door_section: номер секции, если есть дверь
-   - mullion_positions: объект с пользовательскими позициями импостов, если есть
+   - door_section: номер секции для двери (если есть)
+   - mullion_positions: объект с позициями импостов (если есть)
 
-2. schedule_measurement
-   Назначение: записать клиента на замер.
-   Параметры:
+   КОГДА ВЫЗЫВАТЬ: только после подтверждения клиента ("да", "рендерить", "давайте").
+   НЕ ВЫЗЫВАЙ если не все обязательные параметры собраны!
+
+2. schedule_measurement — записать клиента на замер
+   ОБЯЗАТЕЛЬНЫЕ:
    - date: YYYY-MM-DD
    - time: HH:MM
-   - client_name: имя клиента
+   - client_name: имя
    - phone: телефон
+   ОПЦИОНАЛЬНЫЕ:
    - address: адрес
 
-3. update_client_profile
-   Назначение: сохранить контактные данные клиента.
-   Параметры:
-   - name: имя
-   - phone: телефон
-   - address: адрес
+3. update_client_profile — сохранить контактные данные (при получении от клиента)
+   - name: имя (если клиент назвал)
+   - phone: телефон (если клиент дал)
+   - address: адрес (если клиент дал)
 
-4. state_patch
-   Назначение: обновить состояние диалога.
-   Параметры:
+4. state_patch — обновить состояние диалога (ОБЯЗАТЕЛЬНО в каждом ответе!)
    - mode: idle | collecting | confirming | rendering | scheduling
-   - step: текущий шаг
-   - collected_params: собранные параметры перегородки
+   - step: описание текущего шага (напр. "спрашиваю_форму", "спрашиваю_стекло", "резюме")
+   - collected_params: ВЕСЬ объект собранных параметров (копируй старые + добавляй новые)
 """.strip()
