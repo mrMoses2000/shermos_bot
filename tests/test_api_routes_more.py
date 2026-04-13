@@ -74,6 +74,58 @@ def test_measurement_routes(monkeypatch):
     assert client.get("/api/measurements/client/9", headers=_headers()).json()["items"][0]["client_chat_id"] == 9
 
 
+def test_measurements_date_endpoint(monkeypatch):
+    async def fake_by_date(_pool, date, timezone):
+        return [{"id": 1, "date": date, "timezone": timezone}]
+
+    monkeypatch.setattr(routes_measurements, "get_measurements_for_date", fake_by_date)
+
+    response = _client().get("/api/measurements/date/2026-04-15", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["date"] == "2026-04-15"
+
+
+def test_measurements_slots_endpoint(monkeypatch):
+    async def fake_slots(_pool, date, timezone):
+        return ["10:00", "10:30"]
+
+    monkeypatch.setattr(routes_measurements, "get_available_slots", fake_slots)
+
+    response = _client().get("/api/measurements/slots/2026-04-15", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json() == {"date": "2026-04-15", "slots": ["10:00", "10:30"]}
+
+
+def test_measurements_change_status(monkeypatch):
+    async def fake_update_status(_pool, measurement_id, status, reason=""):
+        return {"id": measurement_id, "status": status, "reason": reason}
+
+    monkeypatch.setattr(routes_measurements, "update_measurement_status", fake_update_status)
+
+    response = _client().patch(
+        "/api/measurements/1/status",
+        headers=_headers(),
+        json={"status": "rejected", "reason": "busy"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"id": 1, "status": "rejected", "reason": "busy"}
+
+
+def test_measurements_complete(monkeypatch):
+    async def fake_update_status(_pool, measurement_id, status, reason=""):
+        return {"id": measurement_id, "status": status}
+
+    monkeypatch.setattr(routes_measurements, "update_measurement_status", fake_update_status)
+
+    response = _client().post("/api/measurements/1/complete", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json() == {"id": 1, "status": "completed"}
+
+
 def test_pricing_routes(monkeypatch):
     async def fake_get_prices(_pool):
         return [{"id": "base"}]
