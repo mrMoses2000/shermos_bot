@@ -1,0 +1,146 @@
+from types import SimpleNamespace
+
+import pytest
+
+from src.llm import actions_applier
+from src.models import ActionsJson
+
+
+@pytest.mark.asyncio
+async def test_apply_actions_no_actions_returns_empty_result():
+    result = await actions_applier.apply_actions(
+        ActionsJson(reply_text="ok", actions=None),
+        1,
+        None,
+        None,
+        object(),
+        object(),
+        SimpleNamespace(),
+    )
+
+    assert result == {"render_paths": None, "price": None, "calendar_event": None, "order": None}
+
+
+@pytest.mark.asyncio
+async def test_apply_actions_updates_profile_and_state(monkeypatch):
+    calls = []
+
+    async def fake_update_client(_pool, chat_id, **fields):
+        calls.append(("client", chat_id, fields))
+
+    async def fake_upsert_state(_pool, chat_id, mode, step, collected_params):
+        calls.append(("state", chat_id, mode, step, collected_params))
+
+    monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
+
+    actions = ActionsJson(
+        reply_text="ok",
+        actions={
+            "update_client_profile": {"name": "Анна", "phone": "+1", "address": "Addr"},
+            "state_patch": {
+                "mode": "collecting",
+                "step": "ask_glass",
+                "collected_params": {"shape": "Прямая"},
+            },
+        },
+    )
+
+    await actions_applier.apply_actions(actions, 10, None, {"mode": "idle"}, object(), object(), SimpleNamespace())
+
+    assert calls[0] == ("client", 10, {"name": "Анна", "phone": "+1", "address": "Addr"})
+    assert calls[1] == ("state", 10, "collecting", "ask_glass", {"shape": "Прямая"})
+
+
+@pytest.mark.asyncio
+async def test_apply_actions_render_creates_order_and_notifies_manager(monkeypatch):
+    calls = []
+
+    async def fake_render_partition(params, request_id, settings):
+        calls.append(("render", params.shape, request_id))
+        return {"render_paths": {"0deg": "/tmp/a.png"}}
+
+    async def fake_create_order(_pool, request_id, chat_id, details_json, render_paths, price):
+        calls.append(("order", request_id, chat_id, details_json, render_paths, price))
+        return {"request_id": request_id}
+
+    async def fake_send_message(token, chat_id, text):
+        calls.append(("manager_message", token, chat_id, text))
+        return {"ok": True}
+
+    monkeypatch.setattr(actions_applier, "render_partition", fake_render_partition)
+    monkeypatch.setattr(actions_applier.postgres, "create_order", fake_create_order)
+    monkeypatch.setattr(actions_applier.telegram_sender, "send_message", fake_send_message)
+    monkeypatch.setattr(actions_applier, "uuid4", lambda: "request-1")
+
+    settings = SimpleNamespace(manager_chat_ids_list=[99], manager_bot_token="manager")
+    actions = ActionsJson(
+        reply_text="ok",
+        actions={
+            "render_partition": {
+                "shape": "Прямая",
+                "height": 2.5,
+                "width_a": 3,
+                "glass_type": "1",
+                "frame_color": "1",
+            }
+        },
+    )
+
+    result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), settings)
+
+    assert result["order"]["request_id"] == "request-1"
+    assert result["price"]["total_price"] > 0
+    assert calls[-1][0] == "manager_message"
+
+
+@pytest.mark.asyncio
+async def test_apply_actions_schedule_measurement(monkeypatch):
+    calls = []
+
+    async def fake_calendar(*_args):
+        return {"event_id": "e1", "html_link": "", "start": "2026-04-14T10:00:00+06:00", "end": "x"}
+
+    async def fake_update_client(_pool, chat_id, **fields):
+        calls.append(("client", chat_id, fields))
+
+    async def fake_create_measurement(_pool, **kwargs):
+        calls.append(("measurement", kwargs))
+        return {"id": 1}
+
+    monkeypatch.setattr(actions_applier, "create_measurement_event", fake_calendar)
+    monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
+    monkeypatch.setattr(actions_applier.postgres, "create_measurement", fake_create_measurement)
+
+    actions = ActionsJson(
+        reply_text="ok",
+        actions={
+            "schedule_measurement": {
+                "date": "2026-04-14",
+                "time": "10:00",
+                "client_name": "Анна",
+                "phone": "+1",
+                "address": "Addr",
+            }
+        },
+    )
+
+    result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), SimpleNamespace())
+
+    assert result["calendar_event"]["event_id"] == "e1"
+    assert calls[1][0] == "measurement"
+
+
+@pytest.mark.asyncio
+async def test_apply_actions_invalid_state_transition_stays_current(monkeypatch):
+    calls = []
+
+    async def fake_upsert_state(_pool, chat_id, mode, step, collected_params):
+        calls.append((chat_id, mode, step, collected_params))
+
+    monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
+    actions = ActionsJson(reply_text="ok", actions={"state_patch": {"mode": "rendering", "step": "bad"}})
+
+    await actions_applier.apply_actions(actions, 10, None, {"mode": "idle"}, object(), object(), SimpleNamespace())
+
+    assert calls == [(10, "idle", "bad", {})]
