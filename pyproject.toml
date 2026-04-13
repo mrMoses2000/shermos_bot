@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shermos-bot"
+version = "0.1.0"
+description = "Telegram bot and Mini App CMS for Shermos 3D glass partition visualization."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = [
+  "src/api/*",
+  "src/bot/telegram_sender.py",
+  "src/db/*",
+  "src/engine/calendar_engine.py",
+  "src/engine/render_engine.py",
+  "src/llm/actions_applier.py",
+  "src/llm/executor.py",
+  "src/llm/prompt_builder.py",
+  "src/queue/*",
+  "src/render/*",
+  "src/utils/config_manager.py",
+  "src/utils/logger.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 85
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

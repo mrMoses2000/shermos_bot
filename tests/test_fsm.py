@@ -1,0 +1,17 @@
+from src.engine.fsm import format_summary, get_missing_params, is_valid_transition
+
+
+def test_fsm_transitions_and_missing_params():
+    assert is_valid_transition("idle", "collecting")
+    assert not is_valid_transition("idle", "rendering")
+
+    missing = get_missing_params({"shape": "П-образная", "height": 2.5, "width_a": 2})
+    assert "width_b" in missing
+    assert "width_c" in missing
+
+
+def test_format_summary():
+    summary = format_summary({"shape": "Прямая", "height": 2.6, "width_a": 3})
+
+    assert "Параметры" in summary
+    assert "Прямая" in summary

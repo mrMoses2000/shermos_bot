@@ -1,0 +1,47 @@
+services:
+  postgres:
+    extends:
+      file: docker-compose.yml
+      service: postgres
+    restart: unless-stopped
+
+  redis:
+    extends:
+      file: docker-compose.yml
+      service: redis
+    restart: unless-stopped
+
+  webhook:
+    build: .
+    command: ["python", "run_webhook.py"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "88:88"
+    volumes:
+      - ./data:/app/data
+      - ./certs:/app/certs:ro
+      - ./credentials.json:/app/credentials.json:ro
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "run_worker.py"]
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./credentials.json:/app/credentials.json:ro
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

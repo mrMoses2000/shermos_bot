@@ -1,0 +1,14 @@
+.coverage
+.pytest_cache/
+.venv/
+__pycache__/
+*.py[cod]
+
+data/
+certs/*.key
+certs/*.pem
+credentials.json
+.env
+
+mini-app/dist/
+mini-app/node_modules/
