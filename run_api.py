@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import ssl
-
 import uvicorn
 from fastapi.staticfiles import StaticFiles
 
@@ -14,12 +12,11 @@ from src.config import settings
 app.mount("/", StaticFiles(directory="mini-app/dist", html=True), name="spa")
 
 if __name__ == "__main__":
-    ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ssl_ctx.load_cert_chain(settings.ssl_cert_path, settings.ssl_key_path)
     uvicorn.run(
         app,
         host="0.0.0.0",
         port=8443,
-        ssl=ssl_ctx,
+        ssl_certfile=settings.ssl_cert_path,
+        ssl_keyfile=settings.ssl_key_path,
         log_level="info",
     )
