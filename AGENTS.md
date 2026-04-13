@@ -57,9 +57,16 @@ Phase 0-1 is COMPLETE. All source files exist and are fully implemented.
 **DO NOT:**
 - Rewrite working modules
 - Change the architecture
-- Deploy to server (deployment is manual — see DEPLOY.md)
-- Touch .env (it has real secrets)
+- Touch .env (it has real secrets — bot tokens, passwords)
 - Change GEMINI.md or .gemini/settings.json
+- Change run.sh (deployment script)
+
+**Deployment workflow (for your information, do NOT execute):**
+- `.env` is in `.gitignore` — real tokens live ONLY on Mac and server
+- `.env` is copied to server via `scp` (not through git)
+- `run.sh` is the single deployment script — runs all 10 steps automatically
+- `run.sh` is idempotent — safe to re-run after `git pull`
+- See DEPLOY.md for full instructions
 
 **Auth model for Gemini CLI:** OAuth (not API key).
 Credentials are in ~/.gemini/ on the server. GEMINI_API_KEY is NOT used.
