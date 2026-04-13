@@ -4,62 +4,80 @@
 
 ---
 
-## ⚡ CURRENT STATUS (2024-04 — READ FIRST)
+## ⚡ CURRENT STATUS (2026-04-14 — READ FIRST)
 
-Phase 0-1 is COMPLETE. All source files exist and are fully implemented.
-16/16 unit tests pass. **Do NOT rewrite existing modules** — they are production-ready.
+Phase 0-2 COMPLETE. All source files implemented + 57/57 tests pass.
+**Google Calendar removed** — measurements are fully DB-based now.
+**Do NOT rewrite existing modules** unless fixing a specific bug.
 
 ### What's DONE (do not touch unless fixing a bug):
-- ✅ src/bot/ — webhook.py, telegram_sender.py, keyboards.py
-- ✅ src/llm/ — executor.py, prompt_builder.py, tools_schema.py, actions_parser.py, actions_applier.py
-- ✅ src/queue/ — worker.py, outbox_dispatcher.py
-- ✅ src/engine/ — fsm.py, render_engine.py, pricing_engine.py, calendar_engine.py
+- ✅ src/bot/ — webhook.py, telegram_sender.py, keyboards.py (incl. manager_measurement_keyboard)
+- ✅ src/llm/ — executor.py (stdin pipe + GEMINI_MODEL propagation), prompt_builder.py (missing params + available slots), tools_schema.py, actions_parser.py, actions_applier.py
+- ✅ src/queue/ — worker.py (measurement callbacks: meas_confirm/meas_reject/meas_call, /measurements command, available slots loading), outbox_dispatcher.py
+- ✅ src/engine/ — fsm.py, render_engine.py, pricing_engine.py, **measurement_service.py** (conflict detection, status lifecycle, available slots)
+- ✅ src/engine/calendar_engine.py — DEPRECATED, replaced by measurement_service.py. Do not use.
 - ✅ src/render/ — create_partition.py, validators.py, config_manager.py (DO NOT REWRITE)
 - ✅ src/db/ — postgres.py (40+ CRUD functions), redis_client.py
 - ✅ src/api/ — app.py, auth.py, routes_orders/clients/measurements/pricing/analytics/settings
+  - Measurements API: GET /date/{date}, GET /slots/{date}, PATCH /{id}/status, POST /{id}/confirm, POST /{id}/complete
 - ✅ src/utils/ — logger.py, query_parser.py
-- ✅ src/config.py, src/models.py
-- ✅ run_webhook.py, run_worker.py
-- ✅ migrations/ (001-009)
+- ✅ src/config.py (no gcal fields), src/models.py
+- ✅ run_webhook.py, run_worker.py, run.sh (deployment script)
+- ✅ migrations/ (001-010, incl. 010_measurements_v2.sql with conflict exclusion constraint)
 - ✅ mini-app/ (React + Vite + TypeScript, built)
 - ✅ GEMINI.md, .gemini/settings.json (Gemini CLI config)
-- ✅ DEPLOY.md (deployment guide)
-- ✅ .env.example with all variables documented
+- ✅ DEPLOY.md (3-step: clone, scp .env, ./run.sh)
+- ✅ 57 tests across 17 test files
 
 ### What REMAINS — your task now:
 
-**PHASE 2: Test coverage + integration tests + server deployment**
+**PHASE 3: New tests for measurement system + Mini App polish + coverage ≥85%**
 
-1. **Increase test coverage to ≥85%** (currently ~16 tests, need ~40+)
-   - Add tests for: telegram_sender (mock aiohttp), render_engine, postgres CRUD,
-     actions_applier, prompt_builder (new missing_params logic), outbox_dispatcher,
-     api/auth, api routes (TestClient)
-   - All tests MUST work without real PostgreSQL/Redis/Telegram — use mocks/fixtures
-   - Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing`
+1. **Add tests for new measurement_service.py** (tests/test_measurement_service.py)
+   - `test_validate_time_rejects_past` — time in the past → ValueError
+   - `test_validate_time_rejects_outside_hours` — before 09:30 or after 21:00 → ValueError
+   - `test_validate_time_rejects_non_15min` — 10:07 → ValueError
+   - `test_validate_time_accepts_valid` — 10:15 tomorrow → ok
+   - `test_check_conflict_detects_overlap` — mock pool.fetchrow returns existing row → conflict
+   - `test_check_conflict_no_overlap` — mock pool.fetchrow returns None → ok
+   - `test_get_available_slots_excludes_busy` — mock busy ranges → only free slots returned
+   - `test_schedule_measurement_raises_on_conflict` — call schedule_measurement with conflicting time → ValueError
+   - `test_schedule_measurement_creates_record` — happy path → returns measurement dict
+   - `test_update_status_validates_transitions` — scheduled→confirmed ok, idle→completed → ValueError
+   - `test_update_status_rejects_unknown_status` — "banana" → ValueError
+   All tests use mock asyncpg pool (monkeypatch pool.fetchrow/pool.fetch).
 
-2. **Fix any bugs found during testing**
-   - If a test reveals a real bug, fix the source code
-   - Do NOT change architecture — only fix bugs
+2. **Add tests for measurement manager callbacks** (tests/test_worker_measurements.py)
+   - `test_meas_confirm_notifies_client` — meas_confirm:{id} callback → client gets "подтверждён"
+   - `test_meas_reject_notifies_client` — meas_reject:{id} callback → client gets "не может быть проведён"
+   - `test_meas_call_returns_phone` — meas_call:{id} → returns phone number
+   - `test_measurements_command_lists_upcoming` — /measurements → list of upcoming
+   Mock telegram_sender, postgres, measurement_service.
 
-3. **End-to-end smoke test script** (tests/test_e2e_smoke.py)
-   - Mock Telegram update → webhook → Redis → worker → LLM (mocked) → response
-   - Verify the full pipeline works with mocked external services
+3. **Add tests for new API measurement endpoints** (add to test_api_routes_more.py or new file)
+   - `test_measurements_date_endpoint` — GET /api/measurements/date/2026-04-15
+   - `test_measurements_slots_endpoint` — GET /api/measurements/slots/2026-04-15
+   - `test_measurements_change_status` — PATCH /api/measurements/1/status {"status":"rejected"}
+   - `test_measurements_complete` — POST /api/measurements/1/complete
+   Mock measurement_service functions via monkeypatch.
 
-4. **Docker Compose validation**
-   - Ensure docker-compose.yml POSTGRES_PASSWORD matches .env.example default
-   - Add docker-compose.test.yml for local test DB if needed
+4. **Add tests for available_slots in prompt_builder** (add to test_prompt_builder.py)
+   - `test_slots_section_with_data` — dict with dates → formatted string
+   - `test_slots_section_empty` — None → fallback text
+   - `test_build_prompt_includes_slots` — verify slots appear in prompt output
 
-5. **Mini App improvements** (if time permits)
-   - Verify all pages render without errors
-   - Ensure API client correctly sends X-Telegram-Init-Data header
-   - Run `cd mini-app && npm run build` — must succeed with zero errors
+5. **Run `cd mini-app && npm run build`** — must succeed with zero errors.
+
+6. **Run `.venv/bin/python -m pytest --cov=src --cov-report=term-missing`** and push for ≥85% coverage.
 
 **DO NOT:**
-- Rewrite working modules
+- Rewrite working modules (especially src/render/*, they are battle-tested)
 - Change the architecture
 - Touch .env (it has real secrets — bot tokens, passwords)
 - Change GEMINI.md or .gemini/settings.json
-- Change run.sh (deployment script)
+- Change run.sh
+- Use or reference calendar_engine.py (it's deprecated — use measurement_service.py)
+- Add google-api-python-client or google-auth back to requirements.txt
 
 **Deployment workflow (for your information, do NOT execute):**
 - `.env` is in `.gitignore` — real tokens live ONLY on Mac and server
