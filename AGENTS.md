@@ -1,7 +1,73 @@
 # AGENTS.md — Shermos 3D Partition Visualizer v2.0
 
-> Full rewrite: replace n8n with custom Python webhook + worker + Telegram Mini App CMS.
 > Target model: GPT-5.4 xhigh (Codex). Reasoning effort: xhigh.
+
+---
+
+## ⚡ CURRENT STATUS (2024-04 — READ FIRST)
+
+Phase 0-1 is COMPLETE. All source files exist and are fully implemented.
+16/16 unit tests pass. **Do NOT rewrite existing modules** — they are production-ready.
+
+### What's DONE (do not touch unless fixing a bug):
+- ✅ src/bot/ — webhook.py, telegram_sender.py, keyboards.py
+- ✅ src/llm/ — executor.py, prompt_builder.py, tools_schema.py, actions_parser.py, actions_applier.py
+- ✅ src/queue/ — worker.py, outbox_dispatcher.py
+- ✅ src/engine/ — fsm.py, render_engine.py, pricing_engine.py, calendar_engine.py
+- ✅ src/render/ — create_partition.py, validators.py, config_manager.py (DO NOT REWRITE)
+- ✅ src/db/ — postgres.py (40+ CRUD functions), redis_client.py
+- ✅ src/api/ — app.py, auth.py, routes_orders/clients/measurements/pricing/analytics/settings
+- ✅ src/utils/ — logger.py, query_parser.py
+- ✅ src/config.py, src/models.py
+- ✅ run_webhook.py, run_worker.py
+- ✅ migrations/ (001-009)
+- ✅ mini-app/ (React + Vite + TypeScript, built)
+- ✅ GEMINI.md, .gemini/settings.json (Gemini CLI config)
+- ✅ DEPLOY.md (deployment guide)
+- ✅ .env.example with all variables documented
+
+### What REMAINS — your task now:
+
+**PHASE 2: Test coverage + integration tests + server deployment**
+
+1. **Increase test coverage to ≥85%** (currently ~16 tests, need ~40+)
+   - Add tests for: telegram_sender (mock aiohttp), render_engine, postgres CRUD,
+     actions_applier, prompt_builder (new missing_params logic), outbox_dispatcher,
+     api/auth, api routes (TestClient)
+   - All tests MUST work without real PostgreSQL/Redis/Telegram — use mocks/fixtures
+   - Run: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing`
+
+2. **Fix any bugs found during testing**
+   - If a test reveals a real bug, fix the source code
+   - Do NOT change architecture — only fix bugs
+
+3. **End-to-end smoke test script** (tests/test_e2e_smoke.py)
+   - Mock Telegram update → webhook → Redis → worker → LLM (mocked) → response
+   - Verify the full pipeline works with mocked external services
+
+4. **Docker Compose validation**
+   - Ensure docker-compose.yml POSTGRES_PASSWORD matches .env.example default
+   - Add docker-compose.test.yml for local test DB if needed
+
+5. **Mini App improvements** (if time permits)
+   - Verify all pages render without errors
+   - Ensure API client correctly sends X-Telegram-Init-Data header
+   - Run `cd mini-app && npm run build` — must succeed with zero errors
+
+**DO NOT:**
+- Rewrite working modules
+- Change the architecture
+- Deploy to server (deployment is manual — see DEPLOY.md)
+- Touch .env (it has real secrets)
+- Change GEMINI.md or .gemini/settings.json
+
+**Auth model for Gemini CLI:** OAuth (not API key).
+Credentials are in ~/.gemini/ on the server. GEMINI_API_KEY is NOT used.
+GEMINI_MODEL=gemini-3-flash-preview is set in .env and propagated via executor.py.
+
+---
+
+## Original Specification (for reference)
 
 ## Task
 
