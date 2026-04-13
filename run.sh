@@ -194,6 +194,21 @@ pip install -r requirements.txt -q
 log "Python dependencies installed"
 
 # ============================================================
+# STEP 4b: Build Mini App (React SPA)
+# ============================================================
+step "Step 4b: Build Mini App"
+
+if [ -f mini-app/dist/index.html ]; then
+    log "Mini App already built"
+else
+    cd mini-app
+    npm ci --silent 2>/dev/null
+    VITE_API_BASE="" npm run build --silent 2>/dev/null
+    cd "$PROJECT_DIR"
+    log "Mini App built"
+fi
+
+# ============================================================
 # STEP 5: Database migrations
 # ============================================================
 step "Step 5: Database migrations"
@@ -321,8 +336,31 @@ WantedBy=multi-user.target
 EOF
 log "shermos-worker.service created"
 
+# API service (Mini App backend + SPA on port 8443)
+sudo tee /etc/systemd/system/shermos-api.service >/dev/null << EOF
+[Unit]
+Description=Shermos Mini App API
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=${PROJECT_DIR}
+Environment=PYOPENGL_PLATFORM=egl
+ExecStart=${PROJECT_DIR}/.venv/bin/python run_api.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+log "shermos-api.service created"
+
 sudo systemctl daemon-reload
-sudo systemctl enable shermos-webhook shermos-worker >/dev/null 2>&1
+sudo systemctl enable shermos-webhook shermos-worker shermos-api >/dev/null 2>&1
 
 # ============================================================
 # STEP 9: Start / restart services
@@ -331,6 +369,7 @@ step "Step 9: Starting services"
 
 sudo systemctl restart shermos-webhook
 sudo systemctl restart shermos-worker
+sudo systemctl restart shermos-api
 sleep 2
 
 # Check they're running
@@ -348,6 +387,13 @@ else
     echo "  Check logs: sudo journalctl -u shermos-worker -n 30"
 fi
 
+if sudo systemctl is-active --quiet shermos-api; then
+    log "shermos-api is running"
+else
+    err "shermos-api failed to start!"
+    echo "  Check logs: sudo journalctl -u shermos-api -n 30"
+fi
+
 # ============================================================
 # STEP 10: Health check
 # ============================================================
@@ -360,6 +406,14 @@ if echo "$HEALTH" | grep -q '"ok"'; then
 else
     warn "Webhook health check failed (may need a few seconds to start)"
     echo "  Retry: curl -k https://localhost:88/health"
+fi
+
+API_HEALTH=$(curl -sk https://localhost:8443/health 2>/dev/null || echo "FAIL")
+if echo "$API_HEALTH" | grep -q '"ok"'; then
+    log "Mini App API health check: OK"
+else
+    warn "Mini App API health check failed"
+    echo "  Retry: curl -k https://localhost:8443/health"
 fi
 
 # Verify webhook info from Telegram
@@ -384,12 +438,15 @@ echo -e "${GREEN}  Shermos Bot deployed successfully!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
 echo "  Send /start to your bot in Telegram to test."
+echo "  Mini App: https://3.79.24.73:8443"
 echo ""
 echo "  Useful commands:"
 echo "    sudo journalctl -u shermos-webhook -f    # webhook logs"
 echo "    sudo journalctl -u shermos-worker -f     # worker logs"
+echo "    sudo journalctl -u shermos-api -f        # mini app API logs"
 echo "    sudo systemctl restart shermos-webhook   # restart webhook"
 echo "    sudo systemctl restart shermos-worker    # restart worker"
+echo "    sudo systemctl restart shermos-api       # restart mini app"
 echo "    docker-compose logs -f                   # DB logs"
 echo ""
 echo "  Update deployment:"
