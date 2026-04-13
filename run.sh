@@ -133,17 +133,27 @@ fi
 step "Step 3: Docker Compose (PostgreSQL + Redis)"
 
 # docker-compose.yml reads POSTGRES_* from .env automatically
-if docker compose ps --format json 2>/dev/null | grep -q '"running"'; then
+# Support both docker compose v2 (plugin) and docker-compose v1 (standalone)
+if command -v docker &>/dev/null && docker compose version &>/dev/null 2>&1; then
+    DC="docker compose"
+elif command -v docker-compose &>/dev/null; then
+    DC="docker-compose"
+else
+    err "Neither 'docker compose' nor 'docker-compose' found!"
+    exit 1
+fi
+
+if $DC ps 2>/dev/null | grep -q "Up"; then
     log "Docker services already running"
 else
-    docker compose up -d
+    $DC up -d
     log "Docker Compose started"
 fi
 
 # Wait for Postgres to be ready
 echo -n "  Waiting for PostgreSQL..."
 for i in $(seq 1 30); do
-    if docker compose exec -T postgres pg_isready -U "$(env_val POSTGRES_USER)" -d "$(env_val POSTGRES_DB)" &>/dev/null; then
+    if $DC exec -T postgres pg_isready -U "$(env_val POSTGRES_USER)" -d "$(env_val POSTGRES_DB)" &>/dev/null; then
         echo ""
         log "PostgreSQL ready"
         break
@@ -155,7 +165,7 @@ done
 # Wait for Redis
 echo -n "  Waiting for Redis..."
 for i in $(seq 1 15); do
-    if docker compose exec -T redis redis-cli ping &>/dev/null; then
+    if $DC exec -T redis redis-cli ping &>/dev/null; then
         echo ""
         log "Redis ready"
         break
@@ -193,7 +203,7 @@ PG_DB=$(env_val "POSTGRES_DB")
 PG_PASS=$(env_val "POSTGRES_PASSWORD")
 
 # Create DB user if not exists (ignore error if already exists)
-docker compose exec -T postgres psql -U postgres -c \
+$DC exec -T postgres psql -U postgres -c \
     "DO \$\$ BEGIN
         IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${PG_USER}') THEN
             CREATE ROLE ${PG_USER} WITH LOGIN PASSWORD '${PG_PASS}';
@@ -201,19 +211,19 @@ docker compose exec -T postgres psql -U postgres -c \
     END \$\$;" 2>/dev/null || true
 
 # Create database if not exists
-docker compose exec -T postgres psql -U postgres -c \
+$DC exec -T postgres psql -U postgres -c \
     "SELECT 1 FROM pg_database WHERE datname = '${PG_DB}'" 2>/dev/null | grep -q 1 \
-    || docker compose exec -T postgres psql -U postgres -c \
+    || $DC exec -T postgres psql -U postgres -c \
         "CREATE DATABASE ${PG_DB} OWNER ${PG_USER};" 2>/dev/null
 
 # Grant privileges
-docker compose exec -T postgres psql -U postgres -c \
+$DC exec -T postgres psql -U postgres -c \
     "GRANT ALL PRIVILEGES ON DATABASE ${PG_DB} TO ${PG_USER};" 2>/dev/null || true
 
 # Run migrations (all are idempotent with IF NOT EXISTS)
 for f in migrations/*.sql; do
     fname=$(basename "$f")
-    docker compose exec -T postgres psql -U "$PG_USER" -d "$PG_DB" < "$f" >/dev/null 2>&1
+    $DC exec -T postgres psql -U "$PG_USER" -d "$PG_DB" < "$f" >/dev/null 2>&1
     log "Migration: $fname"
 done
 
@@ -395,7 +405,7 @@ echo "    sudo journalctl -u shermos-webhook -f    # webhook logs"
 echo "    sudo journalctl -u shermos-worker -f     # worker logs"
 echo "    sudo systemctl restart shermos-webhook   # restart webhook"
 echo "    sudo systemctl restart shermos-worker    # restart worker"
-echo "    docker compose logs -f                   # DB logs"
+echo "    docker-compose logs -f                   # DB logs"
 echo ""
 echo "  Update deployment:"
 echo "    cd $PROJECT_DIR && git pull && ./run.sh"
