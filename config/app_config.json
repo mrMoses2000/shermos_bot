@@ -1,0 +1,103 @@
+{
+  "server": {
+    "host": "localhost",
+    "port": 8080,
+    "max_request_size_mb": 1,
+    "render_timeout_seconds": 60,
+    "queue_check_interval": 1
+  },
+  "rendering": {
+    "image_width": 2560,
+    "image_height": 1440,
+    "supersample_factor": 2,
+    "output_directory": "data/results",
+    "angles_for_complex_shapes": [0, 90, 180, 270]
+  },
+  "constraints": {
+    "height": {
+      "min": 0.5,
+      "max": 5.0,
+      "description": "Высота перегородки в метрах"
+    },
+    "width": {
+      "min": 0.3,
+      "max": 10.0,
+      "description": "Ширина перегородки в метрах"
+    },
+    "frame_thickness": {
+      "min": 0.01,
+      "max": 0.2,
+      "description": "Толщина рамы в метрах"
+    },
+    "sections": {
+      "min": 0,
+      "max": 10,
+      "description": "Количество секций (0 для сплошного стекла)"
+    }
+  },
+  "materials": {
+    "frame_colors": {
+      "1": {
+        "name": "Черный матовый",
+        "color": [0.05, 0.05, 0.05, 1.0]
+      },
+      "2": {
+        "name": "Белый глянцевый",
+        "color": [0.9, 0.9, 0.9, 1.0]
+      },
+      "3": {
+        "name": "Алюминий",
+        "color": [0.7, 0.7, 0.7, 1.0]
+      },
+      "4": {
+        "name": "Бронза",
+        "color": [0.4, 0.25, 0.1, 1.0]
+      },
+      "5": {
+        "name": "Золото",
+        "color": [0.83, 0.68, 0.21, 1.0]
+      }
+    },
+    "glass_types": {
+      "1": {
+        "name": "Прозрачное",
+        "color": [0.85, 0.85, 0.85, 0.3],
+        "roughness": 0.05
+      },
+      "2": {
+        "name": "Серое",
+        "color": [0.7, 0.7, 0.7, 0.3],
+        "roughness": 0.05
+      },
+      "3": {
+        "name": "Бронза",
+        "color": [0.6, 0.5, 0.4, 0.3],
+        "roughness": 0.05
+      },
+      "4": {
+        "name": "Рифленое",
+        "color": [0.8, 0.8, 0.8, 0.35],
+        "roughness": 0.1
+      }
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/app.log",
+    "max_file_size_mb": 10,
+    "backup_count": 5,
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  },
+  "paths": {
+    "requests_dir": "data/requests",
+    "results_dir": "data/results",
+    "logs_dir": "logs"
+  },
+  "storage": {
+    "provider": "supabase",
+    "enabled": true,
+    "fallback_to_local": true,
+    "delete_local_after_upload": false,
+    "public_url_expiry": 3600
+  }
+}
