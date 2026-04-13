@@ -408,12 +408,12 @@ else
     echo "  Retry: curl -k https://localhost:88/health"
 fi
 
-API_HEALTH=$(curl -sk https://localhost:8443/health 2>/dev/null || echo "FAIL")
+API_HEALTH=$(curl -sk https://localhost:9443/health 2>/dev/null || echo "FAIL")
 if echo "$API_HEALTH" | grep -q '"ok"'; then
     log "Mini App API health check: OK"
 else
     warn "Mini App API health check failed"
-    echo "  Retry: curl -k https://localhost:8443/health"
+    echo "  Retry: curl -k https://localhost:9443/health"
 fi
 
 # Verify webhook info from Telegram
@@ -438,7 +438,7 @@ echo -e "${GREEN}  Shermos Bot deployed successfully!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
 echo "  Send /start to your bot in Telegram to test."
-echo "  Mini App: https://3.79.24.73:8443"
+echo "  Mini App: https://3.79.24.73:9443"
 echo ""
 echo "  Useful commands:"
 echo "    sudo journalctl -u shermos-webhook -f    # webhook logs"

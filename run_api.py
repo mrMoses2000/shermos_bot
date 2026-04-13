@@ -15,7 +15,7 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8443,
+        port=9443,
         ssl_certfile=settings.ssl_cert_path,
         ssl_keyfile=settings.ssl_key_path,
         log_level="info",
