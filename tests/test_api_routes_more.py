@@ -61,8 +61,11 @@ def test_measurement_routes(monkeypatch):
     async def fake_for_client(_pool, chat_id):
         return [{"client_chat_id": chat_id}]
 
+    async def fake_update_status(_pool, mid, status, **kwargs):
+        return {"id": mid, "status": status}
+
     monkeypatch.setattr(routes_measurements.postgres, "list_measurements", fake_list_measurements)
-    monkeypatch.setattr(routes_measurements.postgres, "confirm_measurement", fake_confirm)
+    monkeypatch.setattr(routes_measurements, "update_measurement_status", fake_update_status)
     monkeypatch.setattr(routes_measurements.postgres, "get_measurements_for_client", fake_for_client)
     client = _client()
 

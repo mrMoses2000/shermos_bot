@@ -60,6 +60,21 @@ def _missing_params_section(state: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _slots_section(available_slots: dict[str, list[str]] | None) -> str:
+    """Format available measurement slots for the prompt."""
+    if not available_slots:
+        return "(Данные о слотах не загружены — спроси клиента о желаемой дате, потом уточним время)"
+    lines = []
+    for date, slots in available_slots.items():
+        if slots:
+            lines.append(f"  {date}: {', '.join(slots)}")
+        else:
+            lines.append(f"  {date}: всё занято")
+    if not lines:
+        return "Нет данных о свободных слотах."
+    return "Свободное время (предлагай клиенту из этого списка):\n" + "\n".join(lines)
+
+
 def _collected_summary(state: dict[str, Any]) -> str:
     """Show what's already collected in human-readable form."""
     collected = state.get("collected_params", {})
@@ -73,6 +88,7 @@ def build_prompt(
     client_profile: dict[str, Any] | None,
     conversation_state: dict[str, Any] | None,
     chat_messages: list[dict[str, Any]],
+    available_slots: dict[str, list[str]] | None = None,
 ) -> str:
     profile_text = "Новый клиент — имя/телефон неизвестны."
     if client_profile:
@@ -155,6 +171,10 @@ def build_prompt(
 ═══ ПРОФИЛЬ КЛИЕНТА ═══
 
 {profile_text}
+
+═══ ДОСТУПНЫЕ СЛОТЫ ДЛЯ ЗАМЕРА ═══
+
+{_slots_section(available_slots)}
 
 ═══ ИСТОРИЯ ДИАЛОГА (последние сообщения) ═══
 

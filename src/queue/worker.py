@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from src.bot.keyboards import open_mini_app_keyboard, rate_render_keyboard
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+from src.bot.keyboards import manager_measurement_keyboard, open_mini_app_keyboard, rate_render_keyboard
 from src.bot.telegram_sender import TelegramSender, telegram_sender
 from src.config import settings
 from src.db import postgres
@@ -19,6 +22,24 @@ from src.queue.outbox_dispatcher import run_outbox_dispatcher
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+
+async def _load_available_slots(pg_pool, days_ahead: int = 3) -> dict[str, list[str]]:
+    """Load available measurement slots for the next N days."""
+    from src.engine.measurement_service import get_available_slots
+
+    tz = ZoneInfo(settings.timezone)
+    today = datetime.now(tz).date()
+    slots = {}
+    for i in range(days_ahead):
+        day = today + timedelta(days=i)
+        date_str = day.strftime("%Y-%m-%d")
+        try:
+            day_slots = await get_available_slots(pg_pool, date_str, settings.timezone)
+            slots[date_str] = day_slots
+        except Exception:
+            slots[date_str] = []
+    return slots
 
 
 CLIENT_COMMANDS = {
@@ -163,7 +184,11 @@ async def process_client_job(
             client = await postgres.create_client(pg_pool, job.chat_id, first_name, username)
         state = await postgres.get_conversation_state(pg_pool, job.chat_id)
         history = await postgres.get_chat_messages(pg_pool, job.chat_id, settings.max_context_messages)
-        prompt = build_prompt(job.text, client, state, history)
+
+        # Load available measurement slots for the next 3 days
+        available_slots = await _load_available_slots(pg_pool)
+
+        prompt = build_prompt(job.text, client, state, history, available_slots=available_slots)
         raw_llm = await call_llm(prompt)
         parsed = parse_actions(raw_llm)
         action_result = await apply_actions(parsed, job.chat_id, client, state, pg_pool, redis_client, settings)
@@ -202,6 +227,68 @@ async def process_client_job(
             await postgres.mark_update_status(pg_pool, job.update_id, "failed", str(exc))
     finally:
         await redis_client.release_user_lock(job.chat_id)
+
+
+async def pool_fetchrow_safe(pg_pool, measurement_id: int) -> dict | None:
+    row = await pg_pool.fetchrow("SELECT * FROM measurements WHERE id=$1", measurement_id)
+    return dict(row) if row else None
+
+
+async def _handle_measurement_callback(
+    text: str,
+    job: Job,
+    pg_pool,
+    sender: TelegramSender,
+) -> None:
+    """Handle meas_confirm:{id} and meas_reject:{id} callbacks from manager."""
+    from src.engine.measurement_service import update_measurement_status
+
+    parts = text.split(":")
+    action = parts[0]  # meas_confirm or meas_reject
+    meas_id = int(parts[1])
+    new_status = "confirmed" if action == "meas_confirm" else "rejected"
+
+    try:
+        measurement = await update_measurement_status(
+            pg_pool, meas_id, new_status, manager_chat_id=job.chat_id
+        )
+    except ValueError as exc:
+        await _send_and_record(
+            pg_pool, sender, settings.manager_bot_token, job.chat_id,
+            f"Ошибка: {exc}", bot_type="manager",
+        )
+        return
+
+    m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+    status_text = "подтверждён" if new_status == "confirmed" else "отклонён"
+
+    # Notify manager
+    await _send_and_record(
+        pg_pool, sender, settings.manager_bot_token, job.chat_id,
+        f"Замер #{meas_id} ({m_time}) — <b>{status_text}</b>.",
+        bot_type="manager",
+    )
+
+    # Notify CLIENT about the decision
+    client_chat_id = measurement["client_chat_id"]
+    if new_status == "confirmed":
+        client_msg = (
+            f"<b>Ваш замер подтверждён!</b>\n\n"
+            f"Дата: <b>{m_time}</b>\n"
+            f"Адрес: {measurement.get('address', '—')}\n\n"
+            f"Мастер приедет в указанное время. "
+            f"Если нужно перенести — напишите нам."
+        )
+    else:
+        client_msg = (
+            f"К сожалению, замер на <b>{m_time}</b> не может быть проведён.\n\n"
+            f"Напишите нам, чтобы выбрать другое время."
+        )
+
+    await _send_and_record(
+        pg_pool, sender, settings.telegram_bot_token, client_chat_id,
+        client_msg, bot_type="client",
+    )
 
 
 async def process_manager_job(
@@ -246,6 +333,25 @@ async def process_manager_job(
                 settings.manager_bot_token,
                 job.chat_id,
                 f"Статус заказа <code>{order_id}</code> обновлен: {status}",
+                bot_type="manager",
+            )
+        elif text.startswith("meas_confirm:") or text.startswith("meas_reject:"):
+            await _handle_measurement_callback(text, job, pg_pool, sender)
+        elif text.startswith("meas_call:"):
+            meas_id = int(text.split(":")[1])
+            meas = await pool_fetchrow_safe(pg_pool, meas_id)
+            phone = meas.get("client_phone", "") if meas else ""
+            reply = f"Телефон клиента: {phone}" if phone else "Телефон не указан."
+            await _send_and_record(pg_pool, sender, settings.manager_bot_token, job.chat_id, reply, bot_type="manager")
+        elif text.startswith("/measurements"):
+            measurements = await postgres.list_measurements(pg_pool, upcoming_only=True, limit=10)
+            lines = ["<b>Ближайшие замеры:</b>"]
+            for m in measurements:
+                t = m["scheduled_time"].strftime("%d.%m %H:%M")
+                lines.append(f"• #{m['id']} {t} — {m.get('client_name', '—')} ({m['status']})")
+            await _send_and_record(
+                pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                "\n".join(lines) if measurements else "Замеров пока нет.",
                 bot_type="manager",
             )
         else:

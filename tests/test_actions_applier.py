@@ -18,7 +18,7 @@ async def test_apply_actions_no_actions_returns_empty_result():
         SimpleNamespace(),
     )
 
-    assert result == {"render_paths": None, "price": None, "calendar_event": None, "order": None}
+    assert result == {"render_paths": None, "price": None, "measurement": None, "order": None}
 
 
 @pytest.mark.asyncio
@@ -97,21 +97,40 @@ async def test_apply_actions_render_creates_order_and_notifies_manager(monkeypat
 @pytest.mark.asyncio
 async def test_apply_actions_schedule_measurement(monkeypatch):
     calls = []
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    async def fake_calendar(*_args):
-        return {"event_id": "e1", "html_link": "", "start": "2026-04-14T10:00:00+06:00", "end": "x"}
+    fake_measurement = {
+        "id": 1,
+        "client_chat_id": 10,
+        "scheduled_time": datetime(2026, 4, 14, 10, 0, tzinfo=ZoneInfo("Asia/Bishkek")),
+        "address": "Addr",
+        "client_name": "Анна",
+        "client_phone": "+1",
+        "status": "scheduled",
+    }
+
+    async def fake_schedule_measurement(**kwargs):
+        calls.append(("schedule", kwargs))
+        return fake_measurement
 
     async def fake_update_client(_pool, chat_id, **fields):
         calls.append(("client", chat_id, fields))
 
-    async def fake_create_measurement(_pool, **kwargs):
-        calls.append(("measurement", kwargs))
-        return {"id": 1}
+    async def fake_send_message(token, chat_id, text, reply_markup=None):
+        calls.append(("msg", token, chat_id))
+        return {"ok": True}
 
-    monkeypatch.setattr(actions_applier, "create_measurement_event", fake_calendar)
+    monkeypatch.setattr(actions_applier, "schedule_measurement", fake_schedule_measurement)
     monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
-    monkeypatch.setattr(actions_applier.postgres, "create_measurement", fake_create_measurement)
+    monkeypatch.setattr(actions_applier.telegram_sender, "send_message", fake_send_message)
 
+    settings = SimpleNamespace(
+        manager_chat_ids_list=[99],
+        manager_bot_token="manager",
+        telegram_bot_token="client",
+        timezone="Asia/Bishkek",
+    )
     actions = ActionsJson(
         reply_text="ok",
         actions={
@@ -125,10 +144,11 @@ async def test_apply_actions_schedule_measurement(monkeypatch):
         },
     )
 
-    result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), SimpleNamespace())
+    result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), settings)
 
-    assert result["calendar_event"]["event_id"] == "e1"
-    assert calls[1][0] == "measurement"
+    assert result["measurement"]["id"] == 1
+    assert any(c[0] == "schedule" for c in calls)
+    assert any(c[0] == "msg" for c in calls)  # manager was notified
 
 
 @pytest.mark.asyncio

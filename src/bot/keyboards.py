@@ -51,5 +51,20 @@ def manager_order_keyboard(order_id: str) -> dict:
     )
 
 
+def manager_measurement_keyboard(measurement_id: int) -> dict:
+    mid = str(measurement_id)
+    return _inline_keyboard(
+        [
+            [
+                {"text": "Подтвердить", "callback_data": f"meas_confirm:{mid}"},
+                {"text": "Отклонить", "callback_data": f"meas_reject:{mid}"},
+            ],
+            [
+                {"text": "Позвонить клиенту", "callback_data": f"meas_call:{mid}"},
+            ],
+        ]
+    )
+
+
 def open_mini_app_keyboard(url: str) -> dict:
-    return _inline_keyboard([[{"text": "📊 Открыть CMS", "web_app": {"url": url}}]])
+    return _inline_keyboard([[{"text": "Открыть CMS", "web_app": {"url": url}}]])

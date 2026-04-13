@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from uuid import uuid4
 
+from src.bot.keyboards import manager_measurement_keyboard
 from src.bot.telegram_sender import telegram_sender
 from src.db import postgres
-from src.engine.calendar_engine import create_measurement_event
 from src.engine.fsm import is_valid_transition
+from src.engine.measurement_service import schedule_measurement
 from src.engine.pricing_engine import calculate_price
 from src.engine.render_engine import render_partition
 from src.models import (
@@ -30,7 +30,7 @@ async def apply_actions(
     redis_client,
     settings,
 ) -> dict:
-    result = {"render_paths": None, "price": None, "calendar_event": None, "order": None}
+    result = {"render_paths": None, "price": None, "measurement": None, "order": None}
     if not actions.actions:
         return result
 
@@ -76,7 +76,7 @@ async def apply_actions(
                 settings.manager_bot_token,
                 manager_chat_id,
                 (
-                    "<b>Новый расчет Shermos</b>\n"
+                    "<b>Новый расчёт Shermos</b>\n"
                     f"Заказ: <code>{request_id}</code>\n"
                     f"Клиент chat_id: <code>{chat_id}</code>\n"
                     f"Сумма: <b>{price['total_price']} {price['currency']}</b>"
@@ -85,14 +85,8 @@ async def apply_actions(
 
     if actions.actions.get("schedule_measurement"):
         params = ScheduleMeasurementAction(**actions.actions["schedule_measurement"])
-        calendar_event = await create_measurement_event(
-            params.date,
-            params.time,
-            params.client_name,
-            params.phone,
-            params.address,
-            settings,
-        )
+
+        # Update client profile with provided contact info
         await postgres.update_client(
             pg_pool,
             chat_id,
@@ -100,15 +94,37 @@ async def apply_actions(
             phone=params.phone,
             address=params.address,
         )
-        await postgres.create_measurement(
-            pg_pool,
-            client_chat_id=chat_id,
-            scheduled_time=datetime.fromisoformat(calendar_event["start"]),
+
+        # Schedule with conflict detection (raises ValueError on conflict)
+        measurement = await schedule_measurement(
+            pool=pg_pool,
+            chat_id=chat_id,
+            date=params.date,
+            time=params.time,
+            client_name=params.client_name,
+            phone=params.phone,
             address=params.address,
-            notes="Создано ботом",
-            calendar_event_id=calendar_event["event_id"],
+            timezone=settings.timezone,
         )
-        result["calendar_event"] = calendar_event
+        result["measurement"] = measurement
+
+        # Notify ALL managers about new measurement
+        m_id = measurement["id"]
+        m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+        for manager_chat_id in settings.manager_chat_ids_list:
+            await telegram_sender.send_message(
+                settings.manager_bot_token,
+                manager_chat_id,
+                (
+                    "<b>Новая запись на замер</b>\n\n"
+                    f"Клиент: <b>{params.client_name}</b>\n"
+                    f"Телефон: {params.phone}\n"
+                    f"Адрес: {params.address or '—'}\n"
+                    f"Время: <b>{m_time}</b>\n"
+                    f"Замер: <code>#{m_id}</code>"
+                ),
+                reply_markup=manager_measurement_keyboard(m_id),
+            )
 
     if actions.actions.get("state_patch"):
         patch = StatePatch(**actions.actions["state_patch"])

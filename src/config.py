@@ -37,8 +37,6 @@ class Settings(BaseSettings):
     max_llm_concurrency: int = 2
     llm_timeout_seconds: int = 90
 
-    gcal_calendar_id: str = "primary"
-    gcal_credentials_path: str = "credentials.json"
     timezone: str = "Asia/Bishkek"
 
     bot_language: str = "ru"
