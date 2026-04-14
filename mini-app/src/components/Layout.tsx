@@ -19,17 +19,15 @@ type Props = {
 export default function Layout({ page, onPageChange, children }: Props) {
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Shermos</p>
-          <h1>CMS</h1>
-        </div>
+      <header className="app-header">
+        <p className="app-kicker">Shermos</p>
+        <h1 className="app-title">CMS</h1>
       </header>
-      <nav className="tabs">
+      <nav className="tabs" aria-label="Разделы CMS">
         {nav.map((item) => (
           <button
             key={item.id}
-            className={item.id === page ? "active" : ""}
+            className={`tab-button${item.id === page ? " is-active" : ""}`}
             onClick={() => onPageChange(item.id)}
             type="button"
           >

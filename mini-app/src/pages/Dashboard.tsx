@@ -20,21 +20,24 @@ export default function Dashboard({ initData }: { initData: string }) {
   if (!stats) return <Spinner />;
 
   return (
-    <div className="stack">
-      <div className="metrics">
-        <article>
-          <span>Выручка</span>
-          <strong>{stats.total_revenue.toLocaleString("ru-RU")} USD</strong>
+    <div className="page-stack">
+      <section className="metrics-grid">
+        <article className="metric-card">
+          <span className="metric-label">Выручка</span>
+          <strong className="metric-value">{stats.total_revenue.toLocaleString("ru-RU")} USD</strong>
+          <span className="metric-note">За последние 30 дней</span>
         </article>
-        <article>
-          <span>Заказы</span>
-          <strong>{stats.total_orders}</strong>
+        <article className="metric-card">
+          <span className="metric-label">Заказы</span>
+          <strong className="metric-value">{stats.total_orders}</strong>
+          <span className="metric-note">Всего в системе</span>
         </article>
-        <article>
-          <span>Замеры</span>
-          <strong>{stats.pending_measurements}</strong>
+        <article className="metric-card">
+          <span className="metric-label">Замеры</span>
+          <strong className="metric-value">{stats.pending_measurements}</strong>
+          <span className="metric-note">Ожидают обработки</span>
         </article>
-      </div>
+      </section>
       <AnalyticsChart stats={stats} />
     </div>
   );

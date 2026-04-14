@@ -1,3 +1,6 @@
 export default function OrderStatusBadge({ status }: { status: string }) {
-  return <span className={`badge badge-${status}`}>{status}</span>;
+  const known = ["scheduled", "new", "confirmed", "completed", "cancelled", "rejected", "in_progress", "processing"];
+  const className = known.includes(status) ? `status-${status}` : "status-default";
+
+  return <span className={`status-badge ${className}`}>{status}</span>;
 }

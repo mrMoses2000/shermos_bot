@@ -16,12 +16,22 @@ export default function App() {
   const authReady = useMemo(() => isTelegram && initData.length > 0, [initData, isTelegram]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = "shermos";
+    type TelegramTheme = { colorScheme?: "dark" | "light" };
+    const webApp = window.Telegram?.WebApp as TelegramTheme | undefined;
+    const colorScheme = webApp?.colorScheme;
+    document.documentElement.dataset.theme = colorScheme === "dark" ? "dark" : "light";
   }, []);
 
   const content = (() => {
     if (!authReady) {
-      return <div className="empty">Откройте CMS из Telegram Mini App.</div>;
+      return (
+        <div className="empty-state">
+          <div className="empty-state-icon" aria-hidden="true">
+            📱
+          </div>
+          <p className="empty-state-text">Откройте CMS из Telegram Mini App.</p>
+        </div>
+      );
     }
     if (page === "orders") return <Orders initData={initData} />;
     if (page === "clients") return <Clients initData={initData} />;

@@ -10,25 +10,25 @@ export type Order = {
 
 export default function OrderTable({ orders }: { orders: Order[] }) {
   return (
-    <div className="table-wrap">
-      <table>
+    <div className="table-card">
+      <table className="data-table">
         <thead>
           <tr>
-            <th>Заказ</th>
-            <th>Клиент</th>
-            <th>Статус</th>
-            <th>Сумма</th>
+            <th className="table-header">Заказ</th>
+            <th className="table-header">Клиент</th>
+            <th className="table-header">Статус</th>
+            <th className="table-header text-right">Сумма</th>
           </tr>
         </thead>
         <tbody>
           {orders.map((order) => (
             <tr key={order.request_id}>
-              <td>{order.request_id.slice(0, 8)}</td>
-              <td>{order.chat_id}</td>
+              <td className="mono">{order.request_id.slice(0, 8)}</td>
+              <td className="text-muted">{order.chat_id}</td>
               <td>
                 <OrderStatusBadge status={order.status} />
               </td>
-              <td>
+              <td className="text-right mono">
                 {order.price?.total_price ?? "—"} {order.price?.currency ?? ""}
               </td>
             </tr>

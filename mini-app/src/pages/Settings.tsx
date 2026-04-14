@@ -18,17 +18,17 @@ export default function Settings({ initData }: { initData: string }) {
   if (!settings) return <Spinner />;
   return (
     <div className="settings-list">
-      <article>
-        <span>Client webhook</span>
-        <code>{settings.webhook_url_client}</code>
+      <article className="settings-row">
+        <span className="settings-label">Client webhook</span>
+        <code className="settings-value">{settings.webhook_url_client}</code>
       </article>
-      <article>
-        <span>Manager webhook</span>
-        <code>{settings.webhook_url_manager}</code>
+      <article className="settings-row">
+        <span className="settings-label">Manager webhook</span>
+        <code className="settings-value">{settings.webhook_url_manager}</code>
       </article>
-      <article>
-        <span>Mini App</span>
-        <code>{settings.mini_app_url || "Не задан"}</code>
+      <article className="settings-row">
+        <span className="settings-label">Mini App</span>
+        <code className="settings-value">{settings.mini_app_url || "Не задан"}</code>
       </article>
     </div>
   );

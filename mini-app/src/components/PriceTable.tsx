@@ -8,23 +8,21 @@ export type Price = {
 
 export default function PriceTable({ prices }: { prices: Price[] }) {
   return (
-    <div className="table-wrap">
-      <table>
+    <div className="table-card">
+      <table className="data-table">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Название</th>
-            <th>Категория</th>
-            <th>Цена</th>
+            <th className="table-header">Name</th>
+            <th className="table-header">Category</th>
+            <th className="table-header text-right">Price</th>
           </tr>
         </thead>
         <tbody>
           {prices.map((price) => (
             <tr key={price.id}>
-              <td>{price.id}</td>
               <td>{price.name}</td>
-              <td>{price.category}</td>
-              <td>
+              <td className="text-muted">{price.category}</td>
+              <td className="mono text-right">
                 {price.amount} {price.currency}
               </td>
             </tr>

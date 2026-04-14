@@ -13,5 +13,15 @@ export default function Clients({ initData }: { initData: string }) {
   }, [initData]);
 
   if (!clients) return <Spinner />;
-  return <div className="list">{clients.map((client) => <ClientCard key={client.chat_id} client={client} />)}</div>;
+  if (clients.length === 0) {
+    return (
+      <div className="empty-state">
+        <div className="empty-state-icon" aria-hidden="true">
+          👤
+        </div>
+        <p className="empty-state-text">Клиентов пока нет.</p>
+      </div>
+    );
+  }
+  return <div className="client-grid">{clients.map((client) => <ClientCard key={client.chat_id} client={client} />)}</div>;
 }

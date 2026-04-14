@@ -13,16 +13,16 @@ export default function AnalyticsChart({ stats }: { stats: Stats }) {
   ];
   const max = Math.max(...values.map((item) => item.value), 1);
   return (
-    <div className="bars">
+    <section className="analytics-card" aria-label="Сводка активности">
       {values.map((item) => (
         <div className="bar-row" key={item.label}>
-          <span>{item.label}</span>
-          <div>
-            <i style={{ width: `${Math.max(8, (item.value / max) * 100)}%` }} />
+          <span className="bar-label">{item.label}</span>
+          <div className="bar-track">
+            <i className="bar-fill" style={{ width: `${Math.max(8, (item.value / max) * 100)}%` }} />
           </div>
-          <b>{item.value}</b>
+          <b className="bar-value">{item.value}</b>
         </div>
       ))}
-    </div>
+    </section>
   );
 }
