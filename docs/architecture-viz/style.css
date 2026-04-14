@@ -126,6 +126,59 @@ h1 {
   font-weight: 700;
 }
 
+body.is-vulns .controls {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.page-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.page-tab {
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 9px 16px;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.page-tab:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.page-tab:active {
+  transform: scale(0.98);
+}
+
+.page-tab.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tab-panel {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+}
+
+.tab-panel.is-active {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .progress-track {
   height: 4px;
   overflow: hidden;
@@ -412,6 +465,386 @@ h1 {
   text-align: center;
 }
 
+.vuln-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.vuln-intro {
+  max-width: 820px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: rgba(12, 12, 12, 0.72);
+  padding: 24px;
+}
+
+.vuln-intro h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 24px;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.vuln-intro p:last-child {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.vulnerability-list {
+  display: grid;
+  gap: 12px;
+}
+
+.vuln-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  overflow: hidden;
+  transition:
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.vuln-card:hover {
+  border-color: #3a3a3a;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.vuln-card.is-expanded {
+  border-color: var(--accent);
+  box-shadow: 0 0 20px var(--accent-soft);
+}
+
+.vuln-toggle {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 20px 24px;
+  text-align: left;
+}
+
+.severity-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.severity-critical {
+  background: var(--danger);
+  animation: severityPulse 2s infinite;
+}
+
+.severity-serious {
+  background: var(--warning);
+}
+
+.vuln-title {
+  display: block;
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.vuln-subtitle {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.vuln-chevron {
+  color: var(--muted);
+  font-size: 16px;
+  transition: transform var(--transition-fast);
+}
+
+.vuln-card.is-expanded .vuln-chevron {
+  transform: rotate(90deg);
+}
+
+.vuln-expand {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 500ms ease;
+}
+
+.vuln-card.is-expanded .vuln-expand {
+  max-height: 1600px;
+}
+
+.vuln-content {
+  display: grid;
+  gap: 18px;
+  border-top: 1px solid var(--border-soft);
+  opacity: 0;
+  padding: 0 24px 24px;
+  transition: opacity 300ms ease 200ms;
+}
+
+.vuln-card.is-expanded .vuln-content {
+  opacity: 1;
+  padding-top: 20px;
+}
+
+.vuln-hop-map {
+  display: grid;
+  grid-template-columns: repeat(15, minmax(28px, 1fr));
+  gap: 6px;
+}
+
+.vuln-hop-cell {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0d0d0d;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  min-height: 32px;
+  display: grid;
+  place-items: center;
+}
+
+.vuln-hop-cell.is-affected {
+  border-color: rgba(239, 68, 68, 0.72);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+}
+
+.cascade-timeline {
+  position: relative;
+  display: grid;
+  gap: 12px;
+}
+
+.cascade-timeline::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 8px;
+  bottom: 8px;
+  border-left: 1px solid rgba(239, 68, 68, 0.45);
+}
+
+.cascade-step {
+  --i: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 12px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 260ms ease,
+    transform 260ms ease;
+  transition-delay: calc(var(--i) * 80ms);
+}
+
+.vuln-card.is-expanded .cascade-step {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.cascade-dot {
+  position: relative;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(239, 68, 68, 0.72);
+  border-radius: 50%;
+  background: var(--surface-raised);
+}
+
+.cascade-card {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #0d0d0d;
+  padding: 12px;
+}
+
+.cascade-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cascade-hop-button {
+  border: 0;
+  background: transparent;
+  color: var(--text-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0;
+  text-align: left;
+}
+
+.cascade-hop-button:hover {
+  color: var(--accent);
+}
+
+.status-chip {
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-transform: uppercase;
+}
+
+.status-trigger,
+.status-blocked {
+  background: var(--danger-bg);
+  color: #fca5a5;
+}
+
+.status-dead,
+.status-skip {
+  background: rgba(75, 85, 99, 0.18);
+  color: #9ca3af;
+  text-decoration: line-through;
+}
+
+.status-degraded,
+.status-garbage {
+  background: var(--warning-bg);
+  color: #fbbf24;
+}
+
+.status-orphan {
+  background: rgba(168, 85, 247, 0.14);
+  color: #d8b4fe;
+}
+
+.status-duplicate {
+  background: rgba(234, 179, 8, 0.14);
+  color: #fde047;
+}
+
+.cascade-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.vuln-impact,
+.vuln-fix {
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.vuln-impact {
+  background: var(--danger-bg);
+  border: 1px solid rgba(239, 68, 68, 0.24);
+}
+
+.vuln-fix {
+  background: var(--ok-bg);
+  border: 1px solid rgba(34, 197, 94, 0.22);
+}
+
+.vuln-block-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-bubble {
+  max-width: 640px;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 8px;
+  background: rgba(10, 10, 10, 0.58);
+  color: #fecaca;
+  font-size: 12px;
+  line-height: 1.7;
+  padding: 12px 14px;
+}
+
+.vuln-fix p {
+  margin: 0;
+  color: #bbf7d0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.mini-flow {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.mini-flow-card {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: #0d0d0d;
+  padding: 14px;
+}
+
+.mini-flow-card strong {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text-strong);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.mini-flow-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.mini-flow-node {
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 8px;
+}
+
+.mini-flow-node.bad {
+  background: var(--danger-bg);
+  color: #fca5a5;
+}
+
+.mini-flow-node.good {
+  background: var(--ok-bg);
+  color: #86efac;
+}
+
+.mini-flow-arrow {
+  color: var(--muted-2);
+  font-size: 11px;
+}
+
+@keyframes severityPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
 @media (max-width: 1180px) {
   .architecture-layout {
     grid-template-columns: 1fr;
@@ -453,6 +886,11 @@ h1 {
     flex: 1;
   }
 
+  .page-tabs {
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
   .architecture-layout {
     gap: 0;
   }
@@ -491,6 +929,23 @@ h1 {
     background: var(--surface);
     padding: 18px;
     animation: mobileExpand 260ms ease;
+  }
+
+  .vuln-toggle {
+    padding: 18px 16px;
+  }
+
+  .vuln-content {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .vuln-hop-map {
+    grid-template-columns: repeat(5, 1fr);
+  }
+
+  .mini-flow {
+    grid-template-columns: 1fr;
   }
 }
 

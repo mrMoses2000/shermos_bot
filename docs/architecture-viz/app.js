@@ -257,6 +257,205 @@ stdout, stderr = <span class="kw">await</span> asyncio.wait_for(proc.communicate
   }
 ];
 
+const vulnerabilities = [
+  {
+    id: "v1",
+    severity: "critical",
+    severityLabel: "CRITICAL",
+    title: "V1 Worker crash after BRPOP",
+    subtitle: "BRPOP удаляет job из очереди до того, как обработка стала durable.",
+    affectedHops: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    userSees: "Клиент отправил сообщение, Telegram получил HTTP 200, но в чате больше ничего не происходит. Повторная доставка не придёт, потому что update уже принят webhook.",
+    fix: "Phase 6.1 заменил разрушительный BRPOP на safe queue processing: job переносится в processing list, имеет ack/requeue и восстанавливается после падения воркера.",
+    before: ["BRPOP", "job удалён", "worker crash", "тишина"],
+    after: ["BLMOVE", "processing list", "recovery", "retry"],
+    cascade: [
+      {
+        hop: 4,
+        status: "trigger",
+        label: "BRPOP забрал job",
+        note: "Redis уже удалил задачу из queue:incoming, но воркер ещё не зафиксировал прогресс в durable storage."
+      },
+      {
+        hop: 5,
+        status: "orphan",
+        label: "Lock остаётся без результата",
+        note: "Если процесс умер после lock, пользователь временно заблокирован TTL-ключом без активной обработки."
+      },
+      {
+        hop: "6-13",
+        status: "dead",
+        label: "Вся бизнес-цепочка пропущена",
+        note: "Состояние, prompt, Gemini, actions, Telegram send и история не выполняются."
+      },
+      {
+        hop: 15,
+        status: "dead",
+        label: "Outbox не поможет",
+        note: "Outbound event не создан, поэтому dispatcher не знает, что нужно повторять."
+      }
+    ]
+  },
+  {
+    id: "v2",
+    severity: "critical",
+    severityLabel: "CRITICAL",
+    title: "V2 Redis disconnect kills all tasks",
+    subtitle: "Разрыв Redis-соединения мог завершить worker loop и оставить систему без потребителя очереди.",
+    affectedHops: [3, 4, 5, 14],
+    userSees: "Новые сообщения принимаются webhook, но ответы не приходят. Очередь растёт, а обработчик фактически умер.",
+    fix: "Phase 6.2 добавил reconnect/backoff loop и изоляцию ошибок Redis: временный обрыв не убивает worker tasks, соединение пересоздаётся.",
+    before: ["Redis error", "task died", "queue grows", "no replies"],
+    after: ["Redis error", "backoff", "reconnect", "continue"],
+    cascade: [
+      {
+        hop: 3,
+        status: "blocked",
+        label: "Webhook пишет в Redis",
+        note: "Если Redis кратко недоступен, новые jobs могут не попасть в очередь с первого раза."
+      },
+      {
+        hop: 4,
+        status: "dead",
+        label: "BRPOP loop падает",
+        note: "Исключение из Redis-клиента завершало основной цикл чтения без восстановления."
+      },
+      {
+        hop: 5,
+        status: "skip",
+        label: "Locks не обновляются",
+        note: "Новые пользовательские locks не ставятся, старые могут жить до TTL."
+      },
+      {
+        hop: 14,
+        status: "skip",
+        label: "Release lock не вызывается",
+        note: "Если воркер упал посреди обработки, finally не гарантирует восстановление всей очереди."
+      }
+    ]
+  },
+  {
+    id: "v3",
+    severity: "serious",
+    severityLabel: "SERIOUS",
+    title: "V3 3D render hangs forever",
+    subtitle: "Синхронный pyrender/trimesh мог зависнуть в thread executor без верхнего лимита времени.",
+    affectedHops: [10, 11, 12, 13, 14],
+    userSees: "После подтверждения рендера бот долго показывает ожидание, затем перестаёт отвечать на новые сообщения этого клиента.",
+    fix: "Phase 6.3 добавил render timeout, отдельную отмену результата и понятный fallback для клиента с освобождением пользовательского lock.",
+    before: ["actions", "render hangs", "lock held", "no send"],
+    after: ["actions", "timeout", "fallback", "lock released"],
+    cascade: [
+      {
+        hop: 10,
+        status: "trigger",
+        label: "render_partition стартует",
+        note: "Actions applier запускает CPU-bound renderer в thread pool."
+      },
+      {
+        sideEffect: "thread_pool",
+        status: "blocked",
+        label: "Thread pool занят",
+        note: "Зависшая задача удерживает поток и может снизить пропускную способность следующих рендеров."
+      },
+      {
+        hop: 11,
+        status: "dead",
+        label: "Ответ не отправлен",
+        note: "До Telegram send выполнение не доходит, поэтому клиент не получает ни изображения, ни ошибку."
+      },
+      {
+        sideEffect: "user_lock",
+        status: "orphan",
+        label: "User lock держится",
+        note: "Пока корутина ждёт рендер, последующие сообщения того же chat_id переоткладываются."
+      },
+      {
+        hop: 14,
+        status: "dead",
+        label: "Release задержан",
+        note: "Lock освобождается только после возврата из зависшего рендера, которого может не быть."
+      }
+    ]
+  },
+  {
+    id: "v4",
+    severity: "serious",
+    severityLabel: "SERIOUS",
+    title: "V4 Gemini OAuth expired",
+    subtitle: "Истёкший OAuth у Gemini CLI превращал LLM output в ошибку, которую пользователь видел как общий сбой.",
+    affectedHops: [8, 9, 10, 11, 13],
+    userSees: "Бот отвечает общей ошибкой или просит повторить, хотя проблема не в параметрах клиента, а в авторизации Gemini на сервере.",
+    fix: "Phase 6.4 добавил классификацию Gemini auth failures, health check для OAuth и явный manager alert вместо немого деградационного ответа.",
+    before: ["prompt", "OAuth expired", "bad stdout", "fallback"],
+    after: ["health check", "auth alert", "clear fallback", "ops action"],
+    cascade: [
+      {
+        hop: 8,
+        status: "trigger",
+        label: "Gemini CLI запускается",
+        note: "Subprocess стартует нормально, но CLI не может получить валидные credentials."
+      },
+      {
+        hop: 9,
+        status: "garbage",
+        label: "Парсер получает не JSON",
+        note: "stdout/stderr содержит auth error вместо JSON-контракта actions."
+      },
+      {
+        hop: 10,
+        status: "skip",
+        label: "Actions не применяются",
+        note: "Рендер, запись заказа и замер не запускаются, потому что валидных actions нет."
+      },
+      {
+        hop: 11,
+        status: "degraded",
+        label: "Клиент получает fallback",
+        note: "Ответ технически отправляется, но не решает задачу клиента."
+      },
+      {
+        hop: 13,
+        status: "degraded",
+        label: "История загрязняется",
+        note: "В чат-историю попадает fallback, который в следующих prompt может мешать диалогу."
+      }
+    ]
+  },
+  {
+    id: "v5",
+    severity: "serious",
+    severityLabel: "SERIOUS",
+    title: "V5 Outbox duplicates messages",
+    subtitle: "Если Telegram send прошёл, а mark_outbound_sent упал, dispatcher мог отправить то же сообщение повторно.",
+    affectedHops: [11, 15],
+    userSees: "Клиент или менеджер получает одинаковый ответ дважды: например, два подтверждения или два комплекта уведомлений.",
+    fix: "Phase 6.5 добавил idempotency на уровне outbound_events: send_result/message_id сохраняется, retry проверяет завершённые попытки и не дублирует уже отправленное.",
+    before: ["send ok", "DB mark failed", "pending", "duplicate send"],
+    after: ["send ok", "message_id saved", "idempotent retry", "no duplicate"],
+    cascade: [
+      {
+        hop: 11,
+        status: "trigger",
+        label: "Telegram принял send",
+        note: "Сообщение уже доставлено во внешний мир, но локальная транзакция ещё не завершена."
+      },
+      {
+        hop: 11,
+        status: "orphan",
+        label: "mark_outbound_sent падает",
+        note: "Outbound event остаётся pending, хотя Telegram message уже существует."
+      },
+      {
+        hop: 15,
+        status: "duplicate",
+        label: "Dispatcher повторяет pending",
+        note: "Фоновый retry видит старый статус и отправляет тот же payload повторно."
+      }
+    ]
+  }
+];
+
 const flowGrid = document.getElementById("flow-grid");
 const detailPanel = document.getElementById("detail-panel");
 const svg = document.getElementById("connector-svg");
@@ -264,8 +463,13 @@ const progressBar = document.getElementById("progress-bar");
 const playToggle = document.getElementById("play-toggle");
 const prevButton = document.getElementById("prev-hop");
 const nextButton = document.getElementById("next-hop");
+const pageTabs = [...document.querySelectorAll(".page-tab")];
+const tabPanels = [...document.querySelectorAll("[data-tab-panel]")];
+const vulnerabilityList = document.getElementById("vulnerability-list");
 
 let activeIndex = 0;
+let activeTab = "flow";
+let expandedVulnIndex = 0;
 let playTimer = null;
 let suppressObserverUntil = 0;
 
@@ -294,6 +498,138 @@ function riskBadges(risks) {
   return risks
     .map((risk) => `<span class="risk-badge risk-${risk.level}">${risk.label}</span>`)
     .join("");
+}
+
+function statusLabel(status) {
+  const labels = {
+    blocked: "blocked",
+    dead: "dead",
+    degraded: "degraded",
+    duplicate: "duplicate",
+    garbage: "garbage",
+    orphan: "orphan",
+    skip: "skip",
+    trigger: "trigger"
+  };
+  return labels[status] || status;
+}
+
+function hopTitle(hop) {
+  if (typeof hop === "number") {
+    return `Шаг ${hop}: ${hops[hop - 1]?.name || "неизвестно"}`;
+  }
+  return `Шаги ${hop}`;
+}
+
+function hopButton(step) {
+  if (typeof step.hop === "number") {
+    return `<button class="cascade-hop-button" type="button" data-jump-hop="${step.hop}">${hopTitle(step.hop)}</button>`;
+  }
+  if (step.hop) {
+    return `<span>${hopTitle(step.hop)}</span>`;
+  }
+  return `<span>${step.sideEffect === "thread_pool" ? "Thread pool" : "User lock"}</span>`;
+}
+
+function renderHopMap(affectedHops) {
+  return `
+    <div class="vuln-hop-map" aria-label="Карта затронутых шагов">
+      ${hops
+        .map((_, index) => {
+          const hopNumber = index + 1;
+          const isAffected = affectedHops.includes(hopNumber);
+          return `<span class="vuln-hop-cell${isAffected ? " is-affected" : ""}">${hopNumber}</span>`;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderTimeline(vulnerability) {
+  return `
+    <div class="cascade-timeline">
+      ${vulnerability.cascade
+        .map(
+          (step, index) => `
+            <div class="cascade-step" style="--i: ${index}">
+              <span class="cascade-dot" aria-hidden="true"></span>
+              <div class="cascade-card">
+                <div class="cascade-heading">
+                  ${hopButton(step)}
+                  <span class="status-chip status-${step.status}">${statusLabel(step.status)}</span>
+                </div>
+                <p class="cascade-note"><b>${step.label}.</b> ${step.note}</p>
+              </div>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function miniFlowRow(items, tone) {
+  return `
+    <div class="mini-flow-row">
+      ${items
+        .map(
+          (item, index) => `
+            <span class="mini-flow-node ${tone}">${item}</span>
+            ${index < items.length - 1 ? '<span class="mini-flow-arrow">→</span>' : ""}
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderVulnerabilityCard(vulnerability, index) {
+  const expanded = index === expandedVulnIndex;
+  return `
+    <article class="vuln-card${expanded ? " is-expanded" : ""}" data-vuln-index="${index}">
+      <button
+        class="vuln-toggle"
+        type="button"
+        aria-expanded="${expanded ? "true" : "false"}"
+        aria-controls="vuln-expand-${vulnerability.id}"
+      >
+        <span class="severity-dot severity-${vulnerability.severity}" aria-label="${vulnerability.severityLabel}"></span>
+        <span>
+          <span class="vuln-title">${vulnerability.title} · ${vulnerability.severityLabel}</span>
+          <span class="vuln-subtitle">${vulnerability.subtitle}</span>
+        </span>
+        <span class="vuln-chevron" aria-hidden="true">›</span>
+      </button>
+      <div id="vuln-expand-${vulnerability.id}" class="vuln-expand">
+        <div class="vuln-content">
+          ${renderHopMap(vulnerability.affectedHops)}
+          ${renderTimeline(vulnerability)}
+          <section class="vuln-impact">
+            <span class="vuln-block-label">Что видит пользователь</span>
+            <div class="chat-bubble">${vulnerability.userSees}</div>
+          </section>
+          <section class="vuln-fix">
+            <span class="vuln-block-label">Как исправлено</span>
+            <p>${vulnerability.fix}</p>
+          </section>
+          <div class="mini-flow" aria-label="Сравнение до и после">
+            <div class="mini-flow-card">
+              <strong>До Phase 6</strong>
+              ${miniFlowRow(vulnerability.before, "bad")}
+            </div>
+            <div class="mini-flow-card">
+              <strong>После Phase 6</strong>
+              ${miniFlowRow(vulnerability.after, "good")}
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderVulnerabilities() {
+  vulnerabilityList.innerHTML = vulnerabilities.map(renderVulnerabilityCard).join("");
 }
 
 function detailMarkup(hop, index) {
@@ -364,6 +700,43 @@ function selectHop(index, shouldScroll = false) {
   }
 }
 
+function switchTab(tabName) {
+  activeTab = tabName;
+  pageTabs.forEach((tab) => {
+    const isActive = tab.dataset.tab === tabName;
+    tab.classList.toggle("is-active", isActive);
+    tab.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+  tabPanels.forEach((panel) => {
+    const isActive = panel.dataset.tabPanel === tabName;
+    panel.hidden = !isActive;
+    panel.classList.toggle("is-active", isActive);
+  });
+  document.body.classList.toggle("is-vulns", tabName === "vulns");
+  if (tabName === "flow") {
+    window.setTimeout(drawConnectors, 50);
+  } else if (playTimer) {
+    setPlaying(false);
+  }
+}
+
+function setExpandedVulnerability(index) {
+  expandedVulnIndex = index;
+  document.querySelectorAll(".vuln-card").forEach((card, cardIndex) => {
+    const isExpanded = cardIndex === expandedVulnIndex;
+    card.classList.toggle("is-expanded", isExpanded);
+    card.querySelector(".vuln-toggle")?.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+  });
+}
+
+function jumpToHop(hopNumber) {
+  switchTab("flow");
+  window.setTimeout(() => {
+    selectHop(hopNumber - 1, true);
+    document.querySelector(".hop-card.is-active")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 80);
+}
+
 function centerOf(element, rootBox) {
   const box = element.getBoundingClientRect();
   return {
@@ -379,6 +752,10 @@ function pathBetween(a, b) {
 }
 
 function drawConnectors() {
+  if (activeTab !== "flow") {
+    return;
+  }
+
   if (window.matchMedia("(max-width: 767px)").matches) {
     svg.innerHTML = "";
     return;
@@ -431,7 +808,39 @@ function wireControls() {
   prevButton.addEventListener("click", () => selectHop(activeIndex - 1, true));
   nextButton.addEventListener("click", () => selectHop(activeIndex + 1, true));
 
+  pageTabs.forEach((tab) => {
+    tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+  });
+
+  vulnerabilityList.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target : event.target.parentElement;
+    if (!target) return;
+
+    const toggle = target.closest(".vuln-toggle");
+    if (toggle) {
+      const card = toggle.closest(".vuln-card");
+      setExpandedVulnerability(Number(card.dataset.vulnIndex));
+      return;
+    }
+
+    const jumpButton = target.closest("[data-jump-hop]");
+    if (jumpButton) {
+      jumpToHop(Number(jumpButton.dataset.jumpHop));
+    }
+  });
+
+  vulnerabilityList.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const target = event.target instanceof Element ? event.target : event.target.parentElement;
+    const toggle = target?.closest(".vuln-toggle");
+    if (!toggle) return;
+    event.preventDefault();
+    const card = toggle.closest(".vuln-card");
+    setExpandedVulnerability(Number(card.dataset.vulnIndex));
+  });
+
   window.addEventListener("keydown", (event) => {
+    if (activeTab !== "flow") return;
     if (event.key === "ArrowRight" || event.key === "ArrowDown") {
       event.preventDefault();
       selectHop(activeIndex + 1, true);
@@ -468,6 +877,7 @@ function observeMobileScroll() {
 }
 
 renderNodes();
+renderVulnerabilities();
 wireControls();
 selectHop(0);
 observeMobileScroll();

@@ -21,18 +21,37 @@
         </div>
       </header>
 
-      <div class="progress-track" aria-hidden="true">
-        <span id="progress-bar" class="progress-bar"></span>
-      </div>
+      <nav class="page-tabs" aria-label="Разделы">
+        <button class="page-tab is-active" data-tab="flow" type="button">Поток сообщения</button>
+        <button class="page-tab" data-tab="vulns" type="button">Уязвимости</button>
+      </nav>
 
-      <main class="architecture-layout">
-        <section class="diagram-shell" aria-label="15 шагов обработки сообщения">
-          <svg id="connector-svg" class="connector-svg" aria-hidden="true"></svg>
-          <div id="flow-grid" class="flow-grid"></div>
-        </section>
+      <section id="flow-panel" class="tab-panel is-active" data-tab-panel="flow">
+        <div class="progress-track" aria-hidden="true">
+          <span id="progress-bar" class="progress-bar"></span>
+        </div>
 
-        <aside id="detail-panel" class="detail-panel" aria-live="polite"></aside>
-      </main>
+        <main class="architecture-layout">
+          <section class="diagram-shell" aria-label="15 шагов обработки сообщения">
+            <svg id="connector-svg" class="connector-svg" aria-hidden="true"></svg>
+            <div id="flow-grid" class="flow-grid"></div>
+          </section>
+
+          <aside id="detail-panel" class="detail-panel" aria-live="polite"></aside>
+        </main>
+      </section>
+
+      <section id="vuln-panel" class="tab-panel vuln-panel" data-tab-panel="vulns" hidden>
+        <div class="vuln-intro">
+          <p class="eyebrow">Failure cascade</p>
+          <h2>Как слабые места ломали цепочку</h2>
+          <p>
+            Пять сценариев показывают, где именно обрывался путь сообщения,
+            что видел пользователь и какой фикс Phase 6 останавливает каскад.
+          </p>
+        </div>
+        <div id="vulnerability-list" class="vulnerability-list"></div>
+      </section>
 
       <footer class="footer-note">Создано для Shermos 3D Partition Visualizer</footer>
     </div>
