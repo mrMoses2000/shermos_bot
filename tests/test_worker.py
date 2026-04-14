@@ -10,7 +10,7 @@ class FakeSender:
 
     async def send_message(self, token, chat_id, text, parse_mode="HTML", reply_markup=None):
         self.messages.append((token, chat_id, text, reply_markup))
-        return {"ok": True}
+        return len(self.messages)
 
     async def send_chat_action(self, *_args, **_kwargs):
         return {"ok": True}
@@ -29,8 +29,8 @@ async def test_handle_clear_command(monkeypatch):
     async def insert_outbound_event(*_args, **_kwargs):
         return 42
 
-    async def mark_outbound_sent(_pool, event_id):
-        calls.append(("sent", event_id))
+    async def mark_outbound_sent(_pool, event_id, telegram_message_id=None):
+        calls.append(("sent", event_id, telegram_message_id))
 
     monkeypatch.setattr(worker.postgres, "clear_chat_messages", clear_chat_messages)
     monkeypatch.setattr(worker.postgres, "upsert_conversation_state", upsert_conversation_state)

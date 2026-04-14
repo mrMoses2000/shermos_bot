@@ -16,6 +16,7 @@ from src.db.redis_client import RedisClient
 from src.llm.actions_applier import apply_actions
 from src.llm.actions_parser import parse_actions
 from src.llm.executor import call_llm
+from src.llm.health_check import run_gemini_health_check
 from src.llm.prompt_builder import build_prompt
 from src.models import Job
 from src.queue.outbox_dispatcher import run_outbox_dispatcher
@@ -80,8 +81,8 @@ async def _send_and_record(
         reply_markup=reply_markup,
         bot_type=bot_type,
     )
-    await sender.send_message(token, chat_id, text, reply_markup=reply_markup)
-    await postgres.mark_outbound_sent(pg_pool, event_id)
+    msg_id = await sender.send_message(token, chat_id, text, reply_markup=reply_markup)
+    await postgres.mark_outbound_sent(pg_pool, event_id, telegram_message_id=msg_id)
 
 
 def _telegram_user(job: Job) -> tuple[str, str]:
@@ -371,16 +372,34 @@ async def process_manager_job(
 
 async def _client_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
     while True:
-        job = await redis_client.dequeue_job("queue:incoming", timeout=5)
-        if job is not None:
-            await process_client_job(job, pg_pool, redis_client, sender)
+        try:
+            job = await redis_client.dequeue_job_safe("queue:incoming", "queue:processing:client", timeout=5)
+            if job is not None:
+                try:
+                    await process_client_job(job, pg_pool, redis_client, sender)
+                finally:
+                    await redis_client.ack_job("queue:processing:client", job)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("client_loop_error", extra={"error": str(exc)})
+            await asyncio.sleep(5)
 
 
 async def _manager_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
     while True:
-        job = await redis_client.dequeue_job("queue:manager", timeout=5)
-        if job is not None:
-            await process_manager_job(job, pg_pool, redis_client, sender)
+        try:
+            job = await redis_client.dequeue_job_safe("queue:manager", "queue:processing:manager", timeout=5)
+            if job is not None:
+                try:
+                    await process_manager_job(job, pg_pool, redis_client, sender)
+                finally:
+                    await redis_client.ack_job("queue:processing:manager", job)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("manager_loop_error", extra={"error": str(exc)})
+            await asyncio.sleep(5)
 
 
 async def run_worker() -> None:
@@ -391,10 +410,17 @@ async def run_worker() -> None:
     redis_client = RedisClient(settings.redis_url)
     await redis_client.connect()
     await telegram_sender.start()
+    recovered = await redis_client.recover_stuck_jobs("queue:processing:client", "queue:incoming")
+    if recovered:
+        logger.info("recovered_stuck_jobs", extra={"count": recovered, "queue": "client"})
+    recovered_mgr = await redis_client.recover_stuck_jobs("queue:processing:manager", "queue:manager")
+    if recovered_mgr:
+        logger.info("recovered_stuck_jobs", extra={"count": recovered_mgr, "queue": "manager"})
     tasks = [
         asyncio.create_task(_client_loop(pg_pool, redis_client, telegram_sender)),
         asyncio.create_task(_manager_loop(pg_pool, redis_client, telegram_sender)),
         asyncio.create_task(run_outbox_dispatcher(pg_pool, telegram_sender)),
+        asyncio.create_task(run_gemini_health_check()),
     ]
     try:
         await asyncio.gather(*tasks)

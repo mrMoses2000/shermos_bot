@@ -51,8 +51,8 @@ async def test_manager_job_orders_and_status(monkeypatch):
         calls.append(("outbound", kwargs.get("bot_type")))
         return 1
 
-    async def fake_mark_sent(_pool, event_id):
-        calls.append(("sent", event_id))
+    async def fake_mark_sent(_pool, event_id, telegram_message_id=None):
+        calls.append(("sent", event_id, telegram_message_id))
 
     async def fake_list_orders(_pool, limit=10):
         return [{"request_id": "r1", "status": "new"}]

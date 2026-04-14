@@ -17,8 +17,8 @@ async def test_dispatch_once_marks_success_and_failure(monkeypatch):
     async def fake_get_pending(_pool, limit=20):
         return events
 
-    async def fake_mark_sent(_pool, event_id):
-        calls.append(("sent", event_id))
+    async def fake_mark_sent(_pool, event_id, telegram_message_id=None):
+        calls.append(("sent", event_id, telegram_message_id))
 
     async def fake_mark_failed(_pool, event_id, error):
         calls.append(("failed", event_id, error))
@@ -36,7 +36,7 @@ async def test_dispatch_once_marks_success_and_failure(monkeypatch):
     sent = await outbox_dispatcher.dispatch_once(object(), Sender())
 
     assert sent == 1
-    assert ("sent", 1) in calls
+    assert ("sent", 1, 1) in calls
     assert calls[-1][0:2] == ("failed", 2)
 
 

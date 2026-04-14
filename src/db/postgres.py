@@ -124,10 +124,18 @@ async def insert_outbound_event(
     )
 
 
-async def mark_outbound_sent(pool, event_id: int) -> None:
+async def mark_outbound_sent(pool, event_id: int, telegram_message_id: int | None = None) -> None:
     await pool.execute(
-        "UPDATE outbound_events SET status='sent', sent_at=now(), error_message=NULL WHERE id=$1",
+        """
+        UPDATE outbound_events
+        SET status='sent',
+            sent_at=now(),
+            telegram_message_id=$2,
+            error_message=NULL
+        WHERE id=$1
+        """,
         event_id,
+        telegram_message_id,
     )
 
 

@@ -24,13 +24,13 @@ async def test_send_message_builds_payload(monkeypatch):
 
     async def fake_post_json(token, method, payload):
         calls.append((token, method, payload))
-        return {"ok": True}
+        return {"ok": True, "result": {"message_id": 123}}
 
     monkeypatch.setattr(sender, "_post_json", fake_post_json)
 
     result = await sender.send_message("tok", 10, "hello", reply_markup={"k": 1})
 
-    assert result["ok"] is True
+    assert result == 123
     assert calls == [
         (
             "tok",

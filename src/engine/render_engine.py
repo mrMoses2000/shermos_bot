@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import signal
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
 from src.models import RenderPartitionAction
 from src.utils.config_manager import config
 from src.utils.query_parser import normalize_render_params
+
+_RENDER_TIMEOUT = 120
 
 
 def _render_params(params: RenderPartitionAction) -> dict[str, Any]:
@@ -76,6 +81,49 @@ def _sync_render(params: dict[str, Any], output_dir: Path) -> dict[str, str]:
 async def render_partition(params: RenderPartitionAction, request_id: str, settings) -> dict[str, Any]:
     render_params = _render_params(params)
     output_dir = Path(settings.renders_dir) / request_id
-    loop = asyncio.get_running_loop()
-    render_paths = await loop.run_in_executor(None, _sync_render, render_params, output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    params_file = output_dir / "_render_params.json"
+    params_file.write_text(json.dumps(render_params), encoding="utf-8")
+    project_root = Path(__file__).resolve().parents[2]
+    script = f"""
+import json
+import os
+import sys
+
+os.environ["OUTPUT_DIR"] = {str(output_dir)!r}
+sys.path.insert(0, {str(project_root)!r})
+
+params = json.loads(open({str(params_file)!r}, encoding="utf-8").read())
+from src.render.create_partition import generate_from_params
+from src.utils.config_manager import config
+
+generate_from_params(params, {{"materials": config.get_section("materials")}})
+"""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+        env={**os.environ, "PYOPENGL_PLATFORM": "egl"},
+    )
+    try:
+        _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=_RENDER_TIMEOUT)
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await process.wait()
+        raise TimeoutError(f"3D render timed out after {_RENDER_TIMEOUT}s")
+
+    if process.returncode != 0:
+        error_text = stderr.decode("utf-8", errors="ignore")[:500]
+        raise RuntimeError(f"Renderer failed: {error_text}")
+
+    params_file.unlink(missing_ok=True)
+    render_paths = _collect_render_paths(output_dir)
+    if not render_paths:
+        raise RuntimeError("Renderer did not produce PNG files")
     return {"render_paths": render_paths}

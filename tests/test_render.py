@@ -8,15 +8,22 @@ from src.models import RenderPartitionAction
 
 
 @pytest.mark.asyncio
-async def test_render_partition_wraps_sync_renderer(monkeypatch, tmp_path):
-    def fake_sync(params, output_dir):
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-        output = Path(output_dir) / "partition_render_hq_0deg.png"
-        output.write_bytes(b"png")
-        assert params["frame_color_id"] == "1"
-        return {"0deg": str(output)}
+async def test_render_partition_runs_subprocess_and_collects_output(monkeypatch, tmp_path):
+    class Process:
+        pid = 123
+        returncode = 0
 
-    monkeypatch.setattr(render_engine, "_sync_render", fake_sync)
+        async def communicate(self):
+            output_dir = tmp_path / "request-1"
+            output = output_dir / "partition_render_hq_0deg.png"
+            output.write_bytes(b"png")
+            assert '"frame_color_id": "1"' in (output_dir / "_render_params.json").read_text()
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*_args, **_kwargs):
+        return Process()
+
+    monkeypatch.setattr(render_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     settings = SimpleNamespace(renders_dir=str(tmp_path))
 
     result = await render_engine.render_partition(

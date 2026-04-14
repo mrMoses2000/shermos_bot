@@ -29,7 +29,7 @@ class FakeSender:
                 "reply_markup": reply_markup,
             }
         )
-        return {"ok": True, "result": {"message_id": len(self.messages)}}
+        return len(self.messages)
 
     async def send_photo(self, token, chat_id, photo_path, caption=""):
         self.photos.append((token, chat_id, photo_path, caption))

@@ -22,8 +22,8 @@ def manager_db(monkeypatch):
         calls.append(("outbound", kwargs.get("chat_id"), kwargs.get("bot_type"), kwargs.get("reply_text")))
         return len(calls)
 
-    async def fake_mark_sent(_pool, event_id):
-        calls.append(("sent", event_id))
+    async def fake_mark_sent(_pool, event_id, telegram_message_id=None):
+        calls.append(("sent", event_id, telegram_message_id))
 
     monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
     monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound)

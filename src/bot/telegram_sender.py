@@ -51,7 +51,7 @@ class TelegramSender:
         text: str,
         parse_mode: str = "HTML",
         reply_markup: dict | None = None,
-    ) -> dict[str, Any]:
+    ) -> int | None:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
@@ -60,7 +60,8 @@ class TelegramSender:
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        return await self._post_json(token, "sendMessage", payload)
+        data = await self._post_json(token, "sendMessage", payload)
+        return data.get("result", {}).get("message_id")
 
     async def send_photo(
         self,

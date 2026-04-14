@@ -6,6 +6,7 @@ from aiohttp import web
 
 from src.config import settings
 from src.db import postgres
+from src.llm.health_check import is_gemini_healthy
 from src.models import Job
 from src.utils.logger import setup_logger
 
@@ -94,7 +95,13 @@ async def handle_manager_webhook(request: web.Request) -> web.Response:
 
 
 async def health(request: web.Request) -> web.Response:
-    return web.json_response({"ok": True, "service": "shermos-webhook"})
+    return web.json_response(
+        {
+            "ok": True,
+            "service": "shermos-webhook",
+            "gemini_healthy": is_gemini_healthy(),
+        }
+    )
 
 
 def setup_routes(app: web.Application) -> None:

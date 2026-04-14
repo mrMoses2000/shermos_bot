@@ -42,6 +42,45 @@ class RedisClient:
             payload = payload.decode("utf-8")
         return Job.model_validate(json.loads(payload))
 
+    async def dequeue_job_safe(self, queue_name: str, processing_name: str, timeout: int = 5) -> Optional[Job]:
+        """Move a job from queue to processing list atomically before processing."""
+        client = self._require_client()
+        try:
+            payload = await client.execute_command(
+                "BLMOVE",
+                queue_name,
+                processing_name,
+                "RIGHT",
+                "LEFT",
+                timeout,
+            )
+        except Exception:
+            result = await client.brpop(queue_name, timeout=timeout)
+            if not result:
+                return None
+            _queue, payload = result
+            await client.lpush(processing_name, payload)
+        if not payload:
+            return None
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8")
+        return Job.model_validate(json.loads(payload))
+
+    async def ack_job(self, processing_name: str, job: Job) -> None:
+        """Remove a completed job from the processing list."""
+        await self._require_client().lrem(processing_name, 1, job.model_dump_json())
+
+    async def recover_stuck_jobs(self, processing_name: str, queue_name: str) -> int:
+        """Move jobs left in processing back to the main queue on startup."""
+        client = self._require_client()
+        count = 0
+        while True:
+            payload = await client.rpoplpush(processing_name, queue_name)
+            if payload is None:
+                break
+            count += 1
+        return count
+
     async def acquire_user_lock(self, chat_id: int, ttl: int = 180) -> bool:
         result = await self._require_client().set(f"lock:user:{chat_id}", "1", nx=True, ex=ttl)
         return bool(result)
