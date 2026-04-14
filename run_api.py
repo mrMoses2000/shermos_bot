@@ -14,9 +14,7 @@ app.mount("/", StaticFiles(directory="mini-app/dist", html=True), name="spa")
 if __name__ == "__main__":
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=9443,
-        ssl_certfile=settings.ssl_cert_path,
-        ssl_keyfile=settings.ssl_key_path,
         log_level="info",
     )

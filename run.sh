@@ -408,12 +408,65 @@ else
     echo "  Retry: curl -k https://localhost:88/health"
 fi
 
-API_HEALTH=$(curl -sk https://localhost:9443/health 2>/dev/null || echo "FAIL")
+API_HEALTH=$(curl -s http://localhost:9443/health 2>/dev/null || echo "FAIL")
 if echo "$API_HEALTH" | grep -q '"ok"'; then
     log "Mini App API health check: OK"
 else
     warn "Mini App API health check failed"
-    echo "  Retry: curl -k https://localhost:9443/health"
+    echo "  Retry: curl http://localhost:9443/health"
+fi
+
+# ============================================================
+# STEP 10b: Ngrok tunnel for Mini App
+# ============================================================
+step "Step 10b: Ngrok tunnel for Mini App"
+
+# Check if ngrok tunnel for port 9443 already exists
+EXISTING_TUNNEL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
+    | python3 -c "import sys,json; tunnels=json.load(sys.stdin).get('tunnels',[]); [print(t['public_url']) for t in tunnels if ':9443' in t.get('config',{}).get('addr','')]" 2>/dev/null)
+
+if [ -n "$EXISTING_TUNNEL" ]; then
+    log "Ngrok tunnel already exists: $EXISTING_TUNNEL"
+    NGROK_URL="$EXISTING_TUNNEL"
+else
+    # Add shermos tunnel to ngrok config and restart with both tunnels
+    NGROK_CONFIG="$HOME/.config/ngrok/ngrok.yml"
+
+    # Add tunnel config if not present
+    if ! grep -q "shermos-api" "$NGROK_CONFIG" 2>/dev/null; then
+        cat >> "$NGROK_CONFIG" << 'NGCFG'
+tunnels:
+  shermos-api:
+    addr: 9443
+    proto: http
+NGCFG
+        log "Added shermos-api tunnel to ngrok config"
+    fi
+
+    # Start ngrok tunnel in background
+    nohup ngrok start shermos-api --log=/tmp/ngrok-shermos.log >/dev/null 2>&1 &
+    sleep 3
+
+    NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
+        | python3 -c "import sys,json; tunnels=json.load(sys.stdin).get('tunnels',[]); [print(t['public_url']) for t in tunnels if ':9443' in t.get('config',{}).get('addr','')]" 2>/dev/null)
+
+    if [ -n "$NGROK_URL" ]; then
+        log "Ngrok tunnel created: $NGROK_URL"
+    else
+        warn "Could not start ngrok tunnel. Start manually: ngrok http 9443"
+    fi
+fi
+
+# Update MINI_APP_URL in .env if ngrok URL changed
+if [ -n "$NGROK_URL" ]; then
+    CURRENT_MINI_URL=$(env_val "MINI_APP_URL")
+    if [ "$CURRENT_MINI_URL" != "$NGROK_URL" ]; then
+        sed -i "s|^MINI_APP_URL=.*|MINI_APP_URL=$NGROK_URL|" .env
+        log "Updated MINI_APP_URL in .env to $NGROK_URL"
+        # Restart worker so it picks up new URL for /start keyboard
+        sudo systemctl restart shermos-worker
+        log "Restarted worker with new MINI_APP_URL"
+    fi
 fi
 
 # Verify webhook info from Telegram
@@ -438,7 +491,9 @@ echo -e "${GREEN}  Shermos Bot deployed successfully!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
 echo "  Send /start to your bot in Telegram to test."
-echo "  Mini App: https://3.79.24.73:9443"
+if [ -n "$NGROK_URL" ]; then
+echo "  Mini App: $NGROK_URL"
+fi
 echo ""
 echo "  Useful commands:"
 echo "    sudo journalctl -u shermos-webhook -f    # webhook logs"
