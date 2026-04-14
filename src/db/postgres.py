@@ -492,23 +492,21 @@ async def update_price(pool, price_id: str, **fields: Any) -> dict[str, Any]:
 
 
 async def seed_default_prices(pool) -> None:
-    defaults = [
-        ("base_sqm", "Base square meter", "base", 180, "USD", {"unit": "sqm"}),
-        ("handle", "Door handle", "addon", 80, "USD", {"unit": "piece"}),
-    ]
-    for item in defaults:
+    from src.engine.pricing_cache import DEFAULT_PRICES
+
+    for item in DEFAULT_PRICES.values():
         await pool.execute(
             """
             INSERT INTO prices (id, name, category, amount, currency, metadata)
             VALUES ($1, $2, $3, $4, $5, $6::jsonb)
             ON CONFLICT DO NOTHING
             """,
-            item[0],
-            item[1],
-            item[2],
-            item[3],
-            item[4],
-            _json(item[5]),
+            item["id"],
+            item["name"],
+            item["category"],
+            item["amount"],
+            item["currency"],
+            _json(item.get("metadata")),
         )
 
 
@@ -517,7 +515,7 @@ async def get_materials(pool) -> list[dict[str, Any]]:
 
 
 async def update_material(pool, material_id: str, **fields: Any) -> dict[str, Any]:
-    allowed = {"kind", "name", "color", "roughness", "metadata"}
+    allowed = {"kind", "name", "color", "roughness", "metadata", "price_modifier"}
     updates = {key: value for key, value in fields.items() if key in allowed and value is not None}
     values: list[Any] = []
     fragments: list[str] = []
@@ -543,10 +541,13 @@ async def seed_default_materials(pool) -> None:
 
     for kind, db_kind in (("frame_colors", "frame"), ("glass_types", "glass")):
         for material_id, data in config.get_all_materials(kind).items():
+            price_modifier = 1.0
+            if db_kind == "frame" and str(material_id) not in {"1", "3"}:
+                price_modifier = 1.04
             await pool.execute(
                 """
-                INSERT INTO materials (id, kind, name, color, roughness, metadata)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb)
+                INSERT INTO materials (id, kind, name, color, roughness, metadata, price_modifier)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
                 ON CONFLICT DO NOTHING
                 """,
                 f"{db_kind}_{material_id}",
@@ -555,6 +556,7 @@ async def seed_default_materials(pool) -> None:
                 _json(data.get("color")),
                 data.get("roughness"),
                 _json({"source_id": material_id}),
+                price_modifier,
             )
 
 

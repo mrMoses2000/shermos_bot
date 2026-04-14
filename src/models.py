@@ -29,6 +29,9 @@ class RenderPartitionAction(BaseModel):
     width_c: Optional[float] = None
     glass_type: str = "1"
     frame_color: str = "1"
+    partition_type: str = "sliding_2"
+    matting: str = "none"
+    complex_pattern: bool = False
     rows: int = 1
     cols: int = 2
     frame_thickness: float = 0.04

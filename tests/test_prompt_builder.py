@@ -15,8 +15,10 @@ def test_missing_params_section_when_complete():
                 "shape": "Прямая",
                 "height": 2.5,
                 "width_a": 3,
+                "partition_type": "sliding_2",
                 "glass_type": "1",
                 "frame_color": "1",
+                "matting": "none",
                 "rows": 1,
                 "cols": 2,
             }

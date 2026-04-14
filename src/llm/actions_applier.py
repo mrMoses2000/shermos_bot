@@ -9,6 +9,7 @@ from src.bot.telegram_sender import telegram_sender
 from src.db import postgres
 from src.engine.fsm import is_valid_transition
 from src.engine.measurement_service import schedule_measurement
+from src.engine.pricing_cache import pricing_cache
 from src.engine.pricing_engine import calculate_price
 from src.engine.render_engine import render_partition
 from src.models import (
@@ -48,6 +49,7 @@ async def apply_actions(
         params = RenderPartitionAction(**actions.actions["render_partition"])
         normalized = normalize_render_params(params.model_dump(exclude_none=True))
         request_id = str(uuid4())
+        await pricing_cache.ensure_loaded(pg_pool)
         render_result = await render_partition(params, request_id, settings)
         price = calculate_price(
             shape=normalized["shape"],
@@ -60,6 +62,10 @@ async def apply_actions(
             rows=int(normalized.get("rows") or 1),
             cols=int(normalized.get("cols") or 2),
             add_handle=bool(normalized.get("add_handle")),
+            partition_type=str(normalized.get("partition_type") or "sliding_2"),
+            matting=str(normalized.get("matting") or "none"),
+            complex_pattern=bool(normalized.get("complex_pattern")),
+            cache=pricing_cache,
         )
         order = await postgres.create_order(
             pg_pool,

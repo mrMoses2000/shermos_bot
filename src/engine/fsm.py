@@ -19,7 +19,17 @@ def is_valid_transition(current_mode: str, next_mode: str) -> bool:
 
 def get_missing_params(collected_params: dict[str, Any], shape: str | None = None) -> list[str]:
     shape_value = shape or collected_params.get("shape")
-    required = ["shape", "height", "width_a", "glass_type", "frame_color", "rows", "cols"]
+    required = [
+        "shape",
+        "partition_type",
+        "height",
+        "width_a",
+        "glass_type",
+        "frame_color",
+        "matting",
+        "rows",
+        "cols",
+    ]
     if shape_value in {"Г-образная", "П-образная"}:
         required.append("width_b")
     if shape_value == "П-образная":
@@ -30,12 +40,15 @@ def get_missing_params(collected_params: dict[str, Any], shape: str | None = Non
 def format_summary(collected_params: dict[str, Any]) -> str:
     labels = {
         "shape": "Форма",
+        "partition_type": "Тип перегородки",
         "height": "Высота",
         "width_a": "Ширина A",
         "width_b": "Ширина B",
         "width_c": "Ширина C",
         "glass_type": "Стекло",
         "frame_color": "Профиль",
+        "matting": "Матировка",
+        "complex_pattern": "Сложный рисунок вставок",
         "rows": "Ряды",
         "cols": "Колонки",
         "frame_thickness": "Толщина рамы",

@@ -22,12 +22,14 @@ from src.utils.config_manager import config
 # Human-readable labels for render parameters
 _PARAM_LABELS = {
     "shape": "Форма перегородки (Прямая / Г-образная / П-образная)",
+    "partition_type": "Тип перегородки (стационарная / раздвижная 2, 3 или 4 створки)",
     "height": "Высота (метры, 0.5–5.0)",
     "width_a": "Ширина A (метры, 0.3–10.0)",
     "width_b": "Ширина B (метры, для Г- и П-образной)",
     "width_c": "Ширина C (метры, для П-образной)",
     "glass_type": "Тип стекла (номер 1–4)",
     "frame_color": "Цвет профиля (номер 1–5)",
+    "matting": "Матировка (нет / сплошная / полосы / рисунок)",
     "rows": "Кол-во рядов (целое число)",
     "cols": "Кол-во колонок (целое число)",
 }
@@ -140,6 +142,8 @@ def build_prompt(
 {_materials_section()}
 
 Доступные формы: Прямая, Г-образная (2 стены), П-образная (3 стены).
+Типы перегородок: fixed (стационарная), sliding_2, sliding_3, sliding_4.
+Матировка: none, matting_solid, matting_stripes, matting_logo. Сложный рисунок вставок: complex_pattern=true.
 Ручки: Современный / Классический. Позиция: Лево / Центр / Право.
 
 ═══ ДЕЙСТВИЯ (actions) ═══

@@ -395,6 +395,111 @@ html[data-theme="dark"] .tab-button.is-active {
   text-align: right;
 }
 
+.pricing-stack {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.pricing-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.pricing-section-title {
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  line-height: 1.5;
+}
+
+.price-matrix-table th:first-child,
+.price-matrix-table td:first-child {
+  width: 34%;
+}
+
+.inline-edit-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 30px;
+  min-width: 86px;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  padding: 4px 6px;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.inline-edit-button:hover {
+  border-color: var(--color-border);
+  background: var(--color-bg-tertiary);
+}
+
+.inline-number-input {
+  width: 92px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  padding: 5px 7px;
+  text-align: right;
+}
+
+.edit-pencil {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family);
+  font-size: var(--text-xs);
+}
+
+.save-status {
+  display: inline-block;
+  width: 12px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.save-status-saved {
+  color: var(--color-success);
+}
+
+.save-status-error {
+  color: var(--color-error);
+}
+
+.material-name-cell {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.material-swatch {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-image:
+    linear-gradient(45deg, rgba(0, 0, 0, 0.08) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(0, 0, 0, 0.08) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.08) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.08) 75%);
+  background-position:
+    0 0,
+    0 9px,
+    9px -9px,
+    -9px 0;
+  background-size: 18px 18px;
+}
+
 .status-badge {
   display: inline-flex;
   align-items: center;

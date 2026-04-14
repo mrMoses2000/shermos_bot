@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from src.engine.pricing_cache import pricing_cache
 from src.models import RenderPartitionAction
 from src.utils.config_manager import config
 from src.utils.query_parser import normalize_render_params
@@ -20,13 +21,12 @@ _RENDER_TIMEOUT = 120
 
 def _render_params(params: RenderPartitionAction) -> dict[str, Any]:
     normalized = normalize_render_params(params.model_dump(exclude_none=True))
-    frame_material = config.get_material("frame_colors", normalized["frame_color"])
-    glass_material = config.get_material("glass_types", normalized["glass_type"])
+    pc = pricing_cache
     normalized["frame_color_id"] = normalized["frame_color"]
     normalized["glass_type_id"] = normalized["glass_type"]
-    normalized["frame_color"] = frame_material["color"] if frame_material else [0.05, 0.05, 0.05, 1.0]
-    normalized["glass_color"] = glass_material["color"] if glass_material else [0.85, 0.85, 0.85, 0.3]
-    normalized["glass_roughness"] = (glass_material or {}).get("roughness", 0.05)
+    normalized["frame_color"] = pc.get_frame_color(normalized["frame_color"])
+    normalized["glass_color"] = pc.get_glass_color(normalized["glass_type"])
+    normalized["glass_roughness"] = pc.get_glass_roughness(normalized["glass_type"])
     if params.door_section:
         normalized["door_sections"] = [params.door_section]
     if params.mullion_positions:

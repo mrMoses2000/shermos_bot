@@ -68,7 +68,11 @@ async def test_apply_actions_render_creates_order_and_notifies_manager(monkeypat
         calls.append(("manager_message", token, chat_id, text))
         return {"ok": True}
 
+    async def fake_ensure_loaded(_pool):
+        calls.append(("cache",))
+
     monkeypatch.setattr(actions_applier, "render_partition", fake_render_partition)
+    monkeypatch.setattr(actions_applier.pricing_cache, "ensure_loaded", fake_ensure_loaded)
     monkeypatch.setattr(actions_applier.postgres, "create_order", fake_create_order)
     monkeypatch.setattr(actions_applier.telegram_sender, "send_message", fake_send_message)
     monkeypatch.setattr(actions_applier, "uuid4", lambda: "request-1")
