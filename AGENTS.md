@@ -826,14 +826,416 @@ Use flexbox row with arrow separators.
 
 ---
 
+---
+
+## PHASE 8: Database-Driven Pricing & Materials
+
+**Execute ONLY after Phase 6 and 7 are done.**
+
+### The Problem
+
+`pricing_engine.py` uses hardcoded values: base rate $180/sqm, handle $80, glass modifier 1.15×, frame modifier 1.04×, sections 0.015 per extra, discount 6%/8sqm. The `prices` table exists in DB, the API allows editing, but `calculate_price()` **ignores the DB entirely**. Manager thinks they're changing prices, but nothing changes.
+
+Similarly, material properties (glass colors, frame roughness) come from `config/app_config.json` file, not DB. The `materials` table is seeded from config on startup but the render engine reads from file, not DB.
+
+### Solution Architecture
+
+Three changes:
+1. **Add `price_modifier` column to `materials`** table — stores the multiplier per material
+2. **Create `PricingCache`** — in-memory cache that loads prices + materials from DB with 5-min TTL
+3. **Rewrite `calculate_price()`** — reads from cache, not hardcoded values
+4. **Rewrite `_render_params()`** — reads material colors from DB cache, not config file
+5. **Expand seed data** — more granular price rows for all configurable parameters
+6. **Update Mini App PricingEditor** — show editable price rows with human-readable names
+
+### 8.1. Migration 012 — add price_modifier to materials + seed expanded prices
+
+**File to create**: `migrations/012_pricing_modifiers.sql`
+
+```sql
+-- Add price_modifier column to materials
+ALTER TABLE materials ADD COLUMN IF NOT EXISTS price_modifier NUMERIC(6, 3) NOT NULL DEFAULT 1.0;
+
+-- Set correct glass modifiers
+UPDATE materials SET price_modifier = 1.0 WHERE id = 'glass_1';
+UPDATE materials SET price_modifier = 1.15 WHERE id = 'glass_2';
+UPDATE materials SET price_modifier = 1.15 WHERE id = 'glass_3';
+UPDATE materials SET price_modifier = 1.15 WHERE id = 'glass_4';
+
+-- Set correct frame modifiers
+UPDATE materials SET price_modifier = 1.0 WHERE id = 'frame_1';
+UPDATE materials SET price_modifier = 1.04 WHERE id = 'frame_2';
+UPDATE materials SET price_modifier = 1.0 WHERE id = 'frame_3';
+UPDATE materials SET price_modifier = 1.04 WHERE id = 'frame_4';
+UPDATE materials SET price_modifier = 1.04 WHERE id = 'frame_5';
+
+-- Seed additional price config rows (ON CONFLICT DO NOTHING for idempotency)
+INSERT INTO prices (id, name, category, amount, currency, metadata)
+VALUES
+    ('section_step', 'Наценка за секцию', 'modifier', 1.5, '%', '{"description": "% за каждую доп. секцию сверх 2", "per_section_above": 2}'::jsonb),
+    ('volume_discount_rate', 'Скидка за объём', 'discount', 6.0, '%', '{"threshold_sqm": 8, "description": "% скидка при площади > threshold"}'::jsonb)
+ON CONFLICT (id) DO NOTHING;
+
+-- Update existing seed prices with Russian names
+UPDATE prices SET name = 'Базовая ставка за кв.м' WHERE id = 'base_sqm' AND name = 'Base square meter';
+UPDATE prices SET name = 'Дверная ручка' WHERE id = 'handle' AND name = 'Door handle';
+```
+
+### 8.2. PricingCache — in-memory cache with TTL
+
+**File to create**: `src/engine/pricing_cache.py`
+
+```python
+"""In-memory cache for pricing config from database."""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from src.db import postgres
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
+_CACHE_TTL = 300  # 5 minutes
+
+
+class PricingCache:
+    """Loads prices + materials from DB, caches in memory with TTL."""
+
+    def __init__(self, ttl: int = _CACHE_TTL):
+        self._ttl = ttl
+        self._prices: dict[str, dict[str, Any]] = {}
+        self._materials: dict[str, dict[str, Any]] = {}
+        self._loaded_at: float = 0.0
+
+    def is_stale(self) -> bool:
+        return time.monotonic() - self._loaded_at > self._ttl
+
+    async def ensure_loaded(self, pool) -> None:
+        """Load from DB if cache is empty or stale."""
+        if self._prices and not self.is_stale():
+            return
+        await self.reload(pool)
+
+    async def reload(self, pool) -> None:
+        """Force reload from DB."""
+        prices_rows = await postgres.get_prices(pool)
+        materials_rows = await postgres.get_materials(pool)
+        self._prices = {row["id"]: row for row in prices_rows}
+        self._materials = {row["id"]: row for row in materials_rows}
+        self._loaded_at = time.monotonic()
+        logger.info("pricing_cache_reloaded", extra={
+            "prices": len(self._prices),
+            "materials": len(self._materials),
+        })
+
+    # --- Price accessors with safe defaults ---
+
+    def get_price_amount(self, price_id: str, default: float = 0.0) -> float:
+        row = self._prices.get(price_id)
+        return float(row["amount"]) if row else default
+
+    def get_base_rate(self) -> float:
+        return self.get_price_amount("base_sqm", 180.0)
+
+    def get_handle_price(self) -> float:
+        return self.get_price_amount("handle", 80.0)
+
+    def get_section_step(self) -> float:
+        """Percentage per additional section beyond 2. Returns as decimal, e.g. 0.015."""
+        return self.get_price_amount("section_step", 1.5) / 100.0
+
+    def get_volume_discount(self) -> tuple[float, float]:
+        """Returns (rate_decimal, threshold_sqm). E.g. (0.06, 8.0)."""
+        row = self._prices.get("volume_discount_rate")
+        if row:
+            rate = float(row["amount"]) / 100.0
+            threshold = float((row.get("metadata") or {}).get("threshold_sqm", 8))
+            return rate, threshold
+        return 0.06, 8.0
+
+    # --- Material accessors ---
+
+    def get_glass_modifier(self, glass_type: str) -> float:
+        row = self._materials.get(f"glass_{glass_type}")
+        return float(row["price_modifier"]) if row and row.get("price_modifier") else 1.0
+
+    def get_frame_modifier(self, frame_color: str) -> float:
+        row = self._materials.get(f"frame_{frame_color}")
+        return float(row["price_modifier"]) if row and row.get("price_modifier") else 1.0
+
+    def get_glass_color(self, glass_type: str) -> list[float]:
+        row = self._materials.get(f"glass_{glass_type}")
+        return row["color"] if row and row.get("color") else [0.85, 0.85, 0.85, 0.3]
+
+    def get_glass_roughness(self, glass_type: str) -> float:
+        row = self._materials.get(f"glass_{glass_type}")
+        return float(row["roughness"]) if row and row.get("roughness") is not None else 0.05
+
+    def get_frame_color(self, frame_color: str) -> list[float]:
+        row = self._materials.get(f"frame_{frame_color}")
+        return row["color"] if row and row.get("color") else [0.05, 0.05, 0.05, 1.0]
+
+    def get_all_prices(self) -> dict[str, dict[str, Any]]:
+        return dict(self._prices)
+
+    def get_all_materials(self) -> dict[str, dict[str, Any]]:
+        return dict(self._materials)
+
+
+# Singleton
+pricing_cache = PricingCache()
+```
+
+### 8.3. Rewrite `calculate_price()` — use cache instead of hardcoded values
+
+**File to modify**: `src/engine/pricing_engine.py`
+
+Keep `_area()` function unchanged.
+
+Replace `calculate_price()` with:
+
+```python
+from src.engine.pricing_cache import pricing_cache
+
+def calculate_price(
+    shape: str,
+    height: float,
+    width_a: float,
+    width_b: float = 0,
+    width_c: float = 0,
+    glass_type: str = "1",
+    frame_color: str = "1",
+    rows: int = 1,
+    cols: int = 2,
+    add_handle: bool = False,
+    cache: PricingCache | None = None,
+) -> dict[str, Any]:
+    pc = cache or pricing_cache
+
+    area = _area(shape, height, width_a, width_b, width_c)
+    base_rate = pc.get_base_rate()
+    base_price = area * base_rate
+
+    glass_modifier = pc.get_glass_modifier(glass_type)
+    frame_modifier = pc.get_frame_modifier(frame_color)
+    section_step = pc.get_section_step()
+    sections_modifier = 1 + max(0, (rows * cols) - 2) * section_step
+
+    subtotal = base_price * glass_modifier * frame_modifier * sections_modifier
+
+    discount_rate, discount_threshold = pc.get_volume_discount()
+    discount = subtotal * discount_rate if area > discount_threshold else 0.0
+    handle_price = pc.get_handle_price() if add_handle else 0.0
+    total = subtotal - discount + handle_price
+
+    return {
+        "total_price": round(total, 2),
+        "currency": "USD",
+        "details": {
+            "area_sq_m": area,
+            "base_rate_per_sqm": base_rate,
+            "base_price": round(base_price, 2),
+            "glass_modifier": glass_modifier,
+            "frame_modifier": frame_modifier,
+            "sections_modifier": round(sections_modifier, 4),
+            "volume_discount": round(discount, 2),
+            "handle_price": handle_price,
+        },
+    }
+```
+
+**Important**: The `cache` parameter is optional with default `pricing_cache` singleton. Tests can pass a mock cache. Real code must call `await pricing_cache.ensure_loaded(pool)` before calling `calculate_price()`.
+
+### 8.4. Update `actions_applier.py` — load cache before price calculation
+
+**File to modify**: `src/llm/actions_applier.py`
+
+Before `calculate_price()` call (around line 51), add:
+
+```python
+from src.engine.pricing_cache import pricing_cache
+
+# Inside apply_actions(), before render_partition block:
+await pricing_cache.ensure_loaded(pg_pool)
+```
+
+And pass cache to calculate_price:
+
+```python
+price = calculate_price(
+    ...,  # existing params unchanged
+    cache=pricing_cache,
+)
+```
+
+### 8.5. Update `render_engine.py` — use DB materials for colors
+
+**File to modify**: `src/engine/render_engine.py`
+
+Replace `_render_params()` to use `pricing_cache` for material lookup:
+
+```python
+from src.engine.pricing_cache import pricing_cache
+
+def _render_params(params: RenderPartitionAction) -> dict[str, Any]:
+    normalized = normalize_render_params(params.model_dump(exclude_none=True))
+    pc = pricing_cache
+
+    normalized["frame_color_id"] = normalized["frame_color"]
+    normalized["glass_type_id"] = normalized["glass_type"]
+    normalized["frame_color"] = pc.get_frame_color(normalized["frame_color"])
+    normalized["glass_color"] = pc.get_glass_color(normalized["glass_type"])
+    normalized["glass_roughness"] = pc.get_glass_roughness(normalized["glass_type"])
+
+    if params.door_section:
+        normalized["door_sections"] = [params.door_section]
+    if params.mullion_positions:
+        normalized.update(params.mullion_positions)
+    return normalized
+```
+
+Also, in `render_partition()` add cache loading:
+
+```python
+async def render_partition(params: RenderPartitionAction, request_id: str, settings) -> dict[str, Any]:
+    # pricing_cache should already be loaded by actions_applier,
+    # but ensure it for direct calls
+    render_params = _render_params(params)
+    # ... rest unchanged
+```
+
+### 8.6. Update `seed_default_materials()` — include price_modifier
+
+**File to modify**: `src/db/postgres.py`
+
+In `seed_default_materials()`, add price_modifier to the INSERT:
+
+Change the INSERT query to:
+```sql
+INSERT INTO materials (id, kind, name, color, roughness, price_modifier, metadata)
+VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb)
+ON CONFLICT (id) DO NOTHING
+```
+
+Add price_modifier values from config. For glass: type "1" = 1.0, others = 1.15. For frame: "1","3" = 1.0, others = 1.04.
+
+### 8.7. Update `get_materials()` in postgres.py
+
+Ensure the `get_materials()` query includes the new `price_modifier` column. Since it uses `SELECT *`, it already does. No change needed.
+
+### 8.8. API cache invalidation
+
+**File to modify**: `src/api/routes_pricing.py`
+
+After any PATCH (price or material update), invalidate the cache:
+
+```python
+from src.engine.pricing_cache import pricing_cache
+
+@router.patch("/prices/{price_id}")
+async def update_price(price_id: str, patch: PricePatch, pool=Depends(get_pool)):
+    result = await postgres.update_price(pool, price_id, **patch.model_dump(exclude_none=True))
+    pricing_cache._loaded_at = 0  # force reload on next access
+    return result
+
+@router.patch("/materials/{material_id}")
+async def update_material(material_id: str, patch: MaterialPatch, pool=Depends(get_pool)):
+    result = await postgres.update_material(pool, material_id, **patch.model_dump(exclude_none=True))
+    pricing_cache._loaded_at = 0  # force reload on next access
+    return result
+```
+
+Also update `MaterialPatch` to include `price_modifier`:
+
+```python
+class MaterialPatch(BaseModel):
+    kind: str | None = None
+    name: str | None = None
+    color: list[float] | None = None
+    roughness: float | None = None
+    price_modifier: float | None = None
+    metadata: dict | None = None
+```
+
+And add `"price_modifier"` to the allowed fields in `postgres.update_material()`.
+
+### 8.9. Update Mini App PricingEditor page
+
+**File to modify**: `mini-app/src/pages/PricingEditor.tsx`
+
+Currently shows a read-only table. Make it editable:
+- Show price name, current value, currency
+- Each price row has an inline edit button (pencil icon)
+- On click, the amount becomes an input field
+- On blur/enter, PATCH `/api/pricing/prices/{id}` with the new amount
+- Show success/error feedback inline
+- Show human-readable names from DB (already stored as `name`)
+
+Also add a Materials section below prices:
+- Show material name, kind, price_modifier
+- Editable price_modifier (same inline edit pattern)
+- Show color swatch (small colored div based on color RGBA array)
+
+### 8.10. Tests
+
+**File to create**: `tests/test_pricing_cache.py`
+
+```
+1. test_cache_loads_from_db — mock pool, verify prices and materials loaded
+2. test_cache_ttl_expired_reloads — set _loaded_at to past, verify reload called
+3. test_cache_not_stale_skips_reload — set _loaded_at to now, verify no reload
+4. test_get_base_rate_from_cache — verify returns DB value, not hardcoded 180
+5. test_get_glass_modifier_from_cache — glass_2 returns 1.15
+6. test_get_frame_modifier_from_cache — frame_5 returns 1.04
+7. test_volume_discount_from_cache — verify rate and threshold from DB
+8. test_calculate_price_uses_cache — mock cache with custom values, verify total differs from hardcoded
+9. test_api_invalidates_cache — PATCH price → _loaded_at becomes 0
+```
+
+**File to modify**: `tests/test_pricing.py`
+
+Update existing `test_calculate_price_applies_modifiers_and_discount` to pass a mock cache or ensure it still works with the default cache values (which match the old hardcoded values, so the test should pass unchanged).
+
+### RULES FOR CODEX
+
+1. **Migration must be idempotent** (IF NOT EXISTS, ON CONFLICT DO NOTHING).
+2. **Default cache values MUST match old hardcoded values** — so existing behavior is unchanged if DB is empty.
+3. **`calculate_price()` must remain a sync function** — the cache is loaded async separately, before calling.
+4. **Keep `config/app_config.json` and `config_manager.py` unchanged** — they become fallback/reference only.
+5. **ALL existing tests must still pass.** The default cache values ensure backward compatibility.
+6. **Mini App build must pass**: `cd mini-app && npm run build` — zero errors.
+7. **Run full test suite**: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing`
+8. **Do NOT touch** docs/, .env, GEMINI.md, run.sh.
+
+### File Checklist
+
+- [ ] `migrations/012_pricing_modifiers.sql` — NEW
+- [ ] `src/engine/pricing_cache.py` — NEW
+- [ ] `src/engine/pricing_engine.py` — rewrite calculate_price() to use cache
+- [ ] `src/llm/actions_applier.py` — load cache before price calculation
+- [ ] `src/engine/render_engine.py` — use cache for material colors
+- [ ] `src/db/postgres.py` — update seed_default_materials() with price_modifier, add price_modifier to update_material() allowed fields
+- [ ] `src/api/routes_pricing.py` — cache invalidation on PATCH, add price_modifier to MaterialPatch
+- [ ] `mini-app/src/pages/PricingEditor.tsx` — editable prices + materials section
+- [ ] `mini-app/src/components/PriceTable.tsx` — inline edit capability
+- [ ] `tests/test_pricing_cache.py` — NEW, 9 tests
+- [ ] Update `tests/test_pricing.py` if needed
+
+### Single commit message:
+`"feat: database-driven pricing with in-memory cache, editable via Mini App"`
+
+---
+
 ## COMMIT ORDER (FINAL)
 
-1. ✅ Phase 4: Mini App UI redesign (committed)
-2. ✅ Phase 5: Architecture visualization site (committed)
-3. Phase 6: Reliability hardening (Python backend fixes + tests)
-4. Phase 7: Vulnerability visualization tab (docs/architecture-viz/ extension)
-
-**Phase 7 MUST be committed AFTER Phase 6. Do not mix them.**
+1. ✅ Phase 4: Mini App UI redesign
+2. ✅ Phase 5: Architecture visualization site
+3. ✅ Phase 6: Reliability hardening
+4. ✅ Phase 7: Vulnerability visualization tab
+5. Phase 8: Database-driven pricing & materials
 
 ---
 
