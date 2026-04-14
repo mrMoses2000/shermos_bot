@@ -6,89 +6,297 @@
 
 ## ⚡ CURRENT STATUS (2026-04-14 — READ FIRST)
 
-Phase 0-2 COMPLETE. All source files implemented + 57/57 tests pass.
-**Google Calendar removed** — measurements are fully DB-based now.
-**Do NOT rewrite existing modules** unless fixing a specific bug.
-
-### What's DONE (do not touch unless fixing a bug):
-- ✅ src/bot/ — webhook.py, telegram_sender.py, keyboards.py (incl. manager_measurement_keyboard)
-- ✅ src/llm/ — executor.py (stdin pipe + GEMINI_MODEL propagation), prompt_builder.py (missing params + available slots), tools_schema.py, actions_parser.py, actions_applier.py
-- ✅ src/queue/ — worker.py (measurement callbacks: meas_confirm/meas_reject/meas_call, /measurements command, available slots loading), outbox_dispatcher.py
-- ✅ src/engine/ — fsm.py, render_engine.py, pricing_engine.py, **measurement_service.py** (conflict detection, status lifecycle, available slots)
-- ✅ src/engine/calendar_engine.py — DEPRECATED, replaced by measurement_service.py. Do not use.
-- ✅ src/render/ — create_partition.py, validators.py, config_manager.py (DO NOT REWRITE)
-- ✅ src/db/ — postgres.py (40+ CRUD functions), redis_client.py
-- ✅ src/api/ — app.py, auth.py, routes_orders/clients/measurements/pricing/analytics/settings
-  - Measurements API: GET /date/{date}, GET /slots/{date}, PATCH /{id}/status, POST /{id}/confirm, POST /{id}/complete
-- ✅ src/utils/ — logger.py, query_parser.py
-- ✅ src/config.py (no gcal fields), src/models.py
-- ✅ run_webhook.py, run_worker.py, run.sh (deployment script)
-- ✅ migrations/ (001-010, incl. 010_measurements_v2.sql with conflict exclusion constraint)
-- ✅ mini-app/ (React + Vite + TypeScript, built)
-- ✅ GEMINI.md, .gemini/settings.json (Gemini CLI config)
-- ✅ DEPLOY.md (3-step: clone, scp .env, ./run.sh)
-- ✅ 57 tests across 17 test files
+Phases 0-3 COMPLETE. Backend deployed, all services running.
+79 tests, 91.77% coverage. Backend is DONE — **do NOT touch backend files**.
 
 ### What REMAINS — your task now:
 
-**PHASE 3: New tests for measurement system + Mini App polish + coverage ≥85%**
+**PHASE 4: Complete Mini App UI Redesign**
 
-1. **Add tests for new measurement_service.py** (tests/test_measurement_service.py)
-   - `test_validate_time_rejects_past` — time in the past → ValueError
-   - `test_validate_time_rejects_outside_hours` — before 09:30 or after 21:00 → ValueError
-   - `test_validate_time_rejects_non_15min` — 10:07 → ValueError
-   - `test_validate_time_accepts_valid` — 10:15 tomorrow → ok
-   - `test_check_conflict_detects_overlap` — mock pool.fetchrow returns existing row → conflict
-   - `test_check_conflict_no_overlap` — mock pool.fetchrow returns None → ok
-   - `test_get_available_slots_excludes_busy` — mock busy ranges → only free slots returned
-   - `test_schedule_measurement_raises_on_conflict` — call schedule_measurement with conflicting time → ValueError
-   - `test_schedule_measurement_creates_record` — happy path → returns measurement dict
-   - `test_update_status_validates_transitions` — scheduled→confirmed ok, idle→completed → ValueError
-   - `test_update_status_rejects_unknown_status` — "banana" → ValueError
-   All tests use mock asyncpg pool (monkeypatch pool.fetchrow/pool.fetch).
+The current Mini App looks like a prototype. It needs a premium redesign inspired by Apple, Figma, and Raycast design systems. The app is a manager CMS (dashboard, orders, clients, measurements) opened inside Telegram WebView.
 
-2. **Add tests for measurement manager callbacks** (tests/test_worker_measurements.py)
-   - `test_meas_confirm_notifies_client` — meas_confirm:{id} callback → client gets "подтверждён"
-   - `test_meas_reject_notifies_client` — meas_reject:{id} callback → client gets "не может быть проведён"
-   - `test_meas_call_returns_phone` — meas_call:{id} → returns phone number
-   - `test_measurements_command_lists_upcoming` — /measurements → list of upcoming
-   Mock telegram_sender, postgres, measurement_service.
+---
 
-3. **Add tests for new API measurement endpoints** (add to test_api_routes_more.py or new file)
-   - `test_measurements_date_endpoint` — GET /api/measurements/date/2026-04-15
-   - `test_measurements_slots_endpoint` — GET /api/measurements/slots/2026-04-15
-   - `test_measurements_change_status` — PATCH /api/measurements/1/status {"status":"rejected"}
-   - `test_measurements_complete` — POST /api/measurements/1/complete
-   Mock measurement_service functions via monkeypatch.
+## PHASE 4 INSTRUCTIONS (READ EVERY LINE)
 
-4. **Add tests for available_slots in prompt_builder** (add to test_prompt_builder.py)
-   - `test_slots_section_with_data` — dict with dates → formatted string
-   - `test_slots_section_empty` — None → fallback text
-   - `test_build_prompt_includes_slots` — verify slots appear in prompt output
+### Context
 
-5. **Run `cd mini-app && npm run build`** — must succeed with zero errors.
+- Project dir: `/Users/mosesvasilenko/shermos-bot/`
+- Mini App dir: `mini-app/` (React + Vite + TypeScript)
+- All source files are in `mini-app/src/`
+- CSS is in `mini-app/src/styles/index.css` (single file, no framework)
+- Build: `cd mini-app && npm run build` — must succeed with zero errors
+- The app runs inside Telegram WebView (320-430px wide, dark and light mode)
+- API base URL comes from `VITE_API_BASE` env var (empty string = same origin)
+- Auth: `X-Telegram-Init-Data` header from Telegram WebApp SDK
 
-6. **Run `.venv/bin/python -m pytest --cov=src --cov-report=term-missing`** and push for ≥85% coverage.
+### Design System Requirements
 
-**DO NOT:**
-- Rewrite working modules (especially src/render/*, they are battle-tested)
-- Change the architecture
-- Touch .env (it has real secrets — bot tokens, passwords)
-- Change GEMINI.md or .gemini/settings.json
-- Change run.sh
-- Use or reference calendar_engine.py (it's deprecated — use measurement_service.py)
-- Add google-api-python-client or google-auth back to requirements.txt
+Apply these design tokens globally. Replace ALL existing styles:
 
-**Deployment workflow (for your information, do NOT execute):**
-- `.env` is in `.gitignore` — real tokens live ONLY on Mac and server
-- `.env` is copied to server via `scp` (not through git)
-- `run.sh` is the single deployment script — runs all 10 steps automatically
-- `run.sh` is idempotent — safe to re-run after `git pull`
-- See DEPLOY.md for full instructions
+**Colors (light mode, CSS custom properties):**
+```
+--color-bg:            #ffffff
+--color-bg-secondary:  #f8f9fa
+--color-bg-tertiary:   #f1f3f5
+--color-text-primary:  #111111
+--color-text-secondary:#6b7280
+--color-text-tertiary: #9ca3af
+--color-border:        #e5e7eb
+--color-border-light:  #f3f4f6
+--color-accent:        #111111
+--color-accent-hover:  #374151
+--color-success:       #059669
+--color-success-bg:    #ecfdf5
+--color-warning:       #d97706
+--color-warning-bg:    #fffbeb
+--color-error:         #dc2626
+--color-error-bg:      #fef2f2
+--color-info:          #2563eb
+--color-info-bg:       #eff6ff
+```
 
-**Auth model for Gemini CLI:** OAuth (not API key).
-Credentials are in ~/.gemini/ on the server. GEMINI_API_KEY is NOT used.
-GEMINI_MODEL=gemini-3-flash-preview is set in .env and propagated via executor.py.
+**Colors (dark mode, via `@media (prefers-color-scheme: dark)` or Telegram theme):**
+```
+--color-bg:            #111111
+--color-bg-secondary:  #1a1a1a
+--color-bg-tertiary:   #222222
+--color-text-primary:  #f9fafb
+--color-text-secondary:#9ca3af
+--color-text-tertiary: #6b7280
+--color-border:        #2d2d2d
+--color-border-light:  #1f1f1f
+--color-accent:        #ffffff
+--color-accent-hover:  #e5e7eb
+```
+
+**Typography:**
+```
+--font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", system-ui, sans-serif;
+--font-mono: "SF Mono", "Fira Code", "Consolas", monospace;
+
+/* Scale */
+--text-xs:    12px; line-height: 1.4;
+--text-sm:    13px; line-height: 1.45;
+--text-base:  15px; line-height: 1.5;
+--text-lg:    17px; line-height: 1.4;
+--text-xl:    20px; line-height: 1.3;
+--text-2xl:   24px; line-height: 1.2;
+--text-3xl:   30px; line-height: 1.1;
+
+/* Weights */
+--font-normal: 400;
+--font-medium: 500;
+--font-semibold: 600;
+--font-bold: 700;
+```
+
+**Spacing (8px base grid):**
+```
+--space-1:  4px;
+--space-2:  8px;
+--space-3:  12px;
+--space-4:  16px;
+--space-5:  20px;
+--space-6:  24px;
+--space-8:  32px;
+--space-10: 40px;
+--space-12: 48px;
+--space-16: 64px;
+```
+
+**Border radius:**
+```
+--radius-sm:  6px;
+--radius-md:  10px;
+--radius-lg:  14px;
+--radius-xl:  20px;
+--radius-full: 9999px;
+```
+
+**Shadows:**
+```
+--shadow-sm:  0 1px 2px rgba(0,0,0,0.04);
+--shadow-md:  0 2px 8px rgba(0,0,0,0.06);
+--shadow-lg:  0 4px 16px rgba(0,0,0,0.08);
+```
+
+**Transitions:**
+```
+--transition-fast: 120ms ease;
+--transition-base: 200ms ease;
+```
+
+### Component Specifications
+
+**1. Layout (Layout.tsx + CSS)**
+
+Header area:
+- Compact: `padding: 16px 20px 0`
+- "SHERMOS" label: `text-xs`, `font-semibold`, `text-secondary`, `letter-spacing: 0.08em`, `text-transform: uppercase`
+- "CMS" title: `text-2xl`, `font-bold`, `text-primary`, `margin-top: 2px`
+
+Tab navigation:
+- Horizontal scroll, `gap: 6px`, `padding: 12px 20px`
+- Each tab: `padding: 8px 16px`, `border-radius: var(--radius-full)`, `text-sm`, `font-medium`
+- Inactive: `bg: transparent`, `color: var(--color-text-secondary)`, no border
+- Active: `bg: var(--color-accent)`, `color: #fff` (light mode) or `color: #111` (dark mode)
+- Hover (inactive): `bg: var(--color-bg-tertiary)`
+- Transition: `background var(--transition-fast), color var(--transition-fast)`
+- Hide scrollbar: `-webkit-overflow-scrolling: touch; scrollbar-width: none;`
+- Add "Цены" and "Настройки" tabs back (6 total)
+
+Content area:
+- `padding: 0 20px 32px`
+
+**2. Dashboard page (Dashboard.tsx)**
+
+Metric cards (3-column grid → 1 column on mobile):
+- Each card: `bg: var(--color-bg)`, `border: 1px solid var(--color-border)`, `border-radius: var(--radius-md)`, `padding: 16px`
+- `shadow: var(--shadow-sm)` on hover
+- Label: `text-xs`, `text-secondary`, `text-transform: uppercase`, `letter-spacing: 0.04em`
+- Value: `text-2xl`, `font-bold`, `text-primary`, `margin-top: 4px`
+- Subtotal/change: `text-xs`, `text-secondary`
+
+Chart (AnalyticsChart):
+- Same card style wrapper
+- Bars: height `6px`, `border-radius: var(--radius-full)`, `bg: var(--color-accent)`
+- Bar background track: `bg: var(--color-bg-tertiary)`
+- Bar label: `text-sm`, `text-secondary`, fixed width `80px`
+- Bar value: `text-sm`, `font-medium`, `text-primary`
+
+**3. Orders page (Orders.tsx + OrderTable.tsx)**
+
+Table:
+- Card wrapper: `border: 1px solid var(--color-border)`, `border-radius: var(--radius-md)`, `overflow: hidden`
+- Header row: `bg: var(--color-bg-secondary)`, `text-xs`, `text-secondary`, `text-transform: uppercase`, `letter-spacing: 0.04em`, `padding: 10px 16px`
+- Data rows: `padding: 12px 16px`, `border-top: 1px solid var(--color-border-light)`
+- Hover row: `bg: var(--color-bg-secondary)` with `transition: var(--transition-fast)`
+- Order ID: `font-mono`, `text-sm`, show first 8 chars
+- Status badge: pill shape (`border-radius: var(--radius-full)`, `padding: 3px 10px`, `text-xs`, `font-medium`)
+  - scheduled: `bg: var(--color-info-bg)`, `color: var(--color-info)`
+  - confirmed/completed: `bg: var(--color-success-bg)`, `color: var(--color-success)`
+  - cancelled/rejected: `bg: var(--color-error-bg)`, `color: var(--color-error)`
+  - in_progress: `bg: var(--color-warning-bg)`, `color: var(--color-warning)`
+
+Empty state:
+- Center of page, `padding: 48px 20px`
+- Icon: use emoji or SVG (e.g. 📋), `font-size: 32px`, `margin-bottom: 12px`
+- Text: `text-sm`, `text-secondary`, `text-align: center`
+- NO dashed border
+
+**4. Clients page (Clients.tsx + ClientCard.tsx)**
+
+Card grid: `display: grid`, `grid-template-columns: 1fr`, `gap: 8px`
+Each card:
+- `border: 1px solid var(--color-border)`, `border-radius: var(--radius-md)`, `padding: 14px 16px`
+- `bg: var(--color-bg)`, hover: `bg: var(--color-bg-secondary)`, `transition: var(--transition-fast)`
+- Name: `text-base`, `font-medium`, `text-primary`
+- Phone/address: `text-sm`, `text-secondary`, `margin-top: 2px`
+- If no phone: `text-tertiary`, italic
+
+**5. Measurements page (Measurements.tsx + MeasurementCalendar.tsx)**
+
+List of measurement items (similar to Clients cards):
+- Each item: card with `border`, `border-radius: var(--radius-md)`, `padding: 14px 16px`
+- Top row: date/time `text-base font-medium` + status badge (pill, right-aligned)
+- Bottom row: address `text-sm text-secondary`
+- Group measurements by date with date separator: `text-xs`, `text-secondary`, `text-transform: uppercase`, `padding: 8px 0 4px`, `letter-spacing: 0.04em`
+
+**6. PricingEditor page (PricingEditor.tsx + PriceTable.tsx)**
+
+Same table style as Orders. Columns: Name, Category, Price.
+- Price column: `font-mono`, right-aligned
+- Editable prices: in future (for now read-only is fine)
+
+**7. Settings page (Settings.tsx)**
+
+Simple key-value list:
+- Each row: `padding: 14px 0`, `border-bottom: 1px solid var(--color-border-light)`
+- Label: `text-xs`, `text-secondary`, `text-transform: uppercase`, `letter-spacing: 0.04em`
+- Value: `text-sm`, `text-primary`, `margin-top: 4px`, `word-break: break-all`
+- Last row: no border-bottom
+
+**8. Spinner (Spinner.tsx)**
+
+- Center of content area vertically and horizontally
+- Size: `24px × 24px`
+- Border: `2px solid var(--color-border)`
+- Border-top: `2px solid var(--color-accent)`
+- Animation: `spin 0.7s linear infinite`
+
+**9. Global styles**
+
+```css
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-family: var(--font-family); font-size: var(--text-base); color: var(--color-text-primary); background: var(--color-bg); -webkit-font-smoothing: antialiased; }
+body { min-height: 100vh; min-height: 100dvh; }
+```
+
+Telegram theme detection: check `window.Telegram?.WebApp?.colorScheme` for "dark"/"light" and set `data-theme` attribute on `<html>`.
+
+### RULES FOR CODEX
+
+1. **ONLY modify files inside `mini-app/src/`** — do NOT touch any Python files, run.sh, .env, or anything outside mini-app/.
+2. **Replace `mini-app/src/styles/index.css` entirely** with new design system CSS using the tokens above.
+3. **Update all .tsx component files** to use the new class names and structure.
+4. **Keep all existing API calls and data types unchanged** — only change visual presentation.
+5. **Do NOT add any new npm dependencies** — use only CSS (no Tailwind, no Chakra, no MUI).
+6. **Do NOT change `mini-app/src/api/client.ts`** or `mini-app/src/hooks/useTelegram.ts`.
+7. **All interactive elements must have smooth transitions** (`var(--transition-fast)` or `var(--transition-base)`).
+8. **Support dark mode** via CSS custom properties + Telegram WebApp colorScheme detection.
+9. **Build MUST pass**: `cd mini-app && npm run build` → zero errors, zero warnings.
+10. **Test in mobile viewport**: design for 375px width primary, 430px max.
+11. **DO NOT use emojis in CSS or TSX** unless specifically for empty state icons.
+
+### File Checklist
+
+After you finish, these files should be modified:
+- [ ] `mini-app/src/styles/index.css` — complete rewrite
+- [ ] `mini-app/src/App.tsx` — dark mode detection via Telegram theme
+- [ ] `mini-app/src/components/Layout.tsx` — new header + tabs structure
+- [ ] `mini-app/src/components/OrderTable.tsx` — new table styles
+- [ ] `mini-app/src/components/OrderStatusBadge.tsx` — pill badge with status colors
+- [ ] `mini-app/src/components/ClientCard.tsx` — new card layout
+- [ ] `mini-app/src/components/MeasurementCalendar.tsx` — grouped list + status badges
+- [ ] `mini-app/src/components/AnalyticsChart.tsx` — new bar chart style
+- [ ] `mini-app/src/components/PriceTable.tsx` — consistent table style
+- [ ] `mini-app/src/components/Spinner.tsx` — minimal spinner
+- [ ] `mini-app/src/pages/Dashboard.tsx` — metric cards grid
+- [ ] `mini-app/src/pages/Orders.tsx` — page structure
+- [ ] `mini-app/src/pages/Clients.tsx` — card grid
+- [ ] `mini-app/src/pages/Measurements.tsx` — grouped list
+- [ ] `mini-app/src/pages/PricingEditor.tsx` — page structure
+- [ ] `mini-app/src/pages/Settings.tsx` — key-value list
+
+### Verification
+
+Run `cd mini-app && npm run build`. Output must contain:
+```
+✓ built in ...ms
+```
+With zero errors. If TypeScript errors occur — fix them. If CSS has syntax errors — fix them.
+
+---
+
+### What's DONE (do not touch):
+
+**Backend (ALL COMPLETE — DO NOT MODIFY):**
+- src/bot/, src/llm/, src/queue/, src/engine/, src/render/, src/db/, src/api/, src/utils/
+- src/config.py, src/models.py
+- run_webhook.py, run_worker.py, run_api.py, run.sh
+- migrations/ (001-010)
+- GEMINI.md, .gemini/settings.json, DEPLOY.md
+- 79 tests, 91.77% coverage
+- All services deployed and running on server
+
+**DO NOT touch or modify:**
+- Any .py file
+- run.sh, .env, .env.example
+- GEMINI.md, .gemini/settings.json
+- migrations/
+- requirements.txt, pyproject.toml
+- docker-compose.yml
 
 ---
 
