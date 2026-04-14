@@ -3,20 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Shermos Architecture</title>
+    <title>Архитектура Shermos</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <div class="page-shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">Runtime Trace</p>
-          <h1>Shermos Architecture</h1>
+          <p class="eyebrow">Трассировка выполнения</p>
+          <h1>Архитектура Shermos</h1>
           <p class="subtitle">Путь сообщения от клиента до ответа</p>
         </div>
         <div class="controls" aria-label="Управление анимацией">
           <button id="prev-hop" class="control-button" type="button" aria-label="Предыдущий hop">←</button>
-          <button id="play-toggle" class="control-button control-primary" type="button">Play</button>
+          <button id="play-toggle" class="control-button control-primary" type="button">Старт</button>
           <button id="next-hop" class="control-button" type="button" aria-label="Следующий hop">→</button>
         </div>
       </header>
@@ -26,7 +26,7 @@
       </div>
 
       <main class="architecture-layout">
-        <section class="diagram-shell" aria-label="15 hops message flow">
+        <section class="diagram-shell" aria-label="15 шагов обработки сообщения">
           <svg id="connector-svg" class="connector-svg" aria-hidden="true"></svg>
           <div id="flow-grid" class="flow-grid"></div>
         </section>

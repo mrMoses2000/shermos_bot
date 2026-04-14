@@ -3,12 +3,12 @@ const hops = [
     icon: "📨",
     name: "Telegram POST",
     file: "src/bot/webhook.py:50-85",
-    description: "Telegram delivers the raw Update to aiohttp over HTTPS.",
-    input: ["HTTPS POST from Telegram servers to 0.0.0.0:88", "JSON Telegram Update payload", "X-Telegram-Bot-Api-Secret-Token header"],
-    output: ["Parsed chat_id, user_id, text, msg_type, callback_data", "Always returns HTTP 200"],
-    network: "TLS with self-signed cert, TCP port 88, aiohttp request handler.",
-    state: ["No durable state yet; raw payload is only in process memory."],
-    risks: [{ level: "none", label: "Errors swallowed" }],
+    description: "Telegram доставляет сырой Update в aiohttp по HTTPS.",
+    input: ["HTTPS POST от серверов Telegram на 0.0.0.0:88", "JSON payload Telegram Update", "Заголовок X-Telegram-Bot-Api-Secret-Token"],
+    output: ["Извлечены chat_id, user_id, text, msg_type, callback_data", "Всегда возвращается HTTP 200"],
+    network: "TLS с self-signed сертификатом, TCP порт 88, обработчик aiohttp.",
+    state: ["Долговременного состояния ещё нет; сырой payload живёт только в памяти процесса."],
+    risks: [{ level: "none", label: "Ошибки проглатываются" }],
     timing: "< 50ms",
     code: `<span class="kw">async def</span> _process_webhook(request, bot_type, secret_token):
     <span class="kw">if</span> request.headers.get(<span class="str">"X-Telegram-Bot-Api-Secret-Token"</span>) != secret_token:
@@ -19,14 +19,14 @@ const hops = [
   },
   {
     icon: "🧾",
-    name: "Dedup (PG)",
+    name: "Дедупликация (PG)",
     file: "src/db/postgres.py:62-72",
-    description: "The update_id is inserted once to reject duplicate Telegram retries.",
-    input: ["update_id integer from Telegram Update"],
-    output: ["is_new boolean", "Duplicate updates stop before enqueue"],
-    network: "asyncpg binary protocol over TCP localhost:5432.",
-    state: ["INSERT row into processed_updates with status='received'."],
-    risks: [{ level: "crash", label: "PG down = update lost" }],
+    description: "update_id вставляется один раз, чтобы отсеять повторные доставки Telegram.",
+    input: ["Целочисленный update_id из Telegram Update"],
+    output: ["Булевый is_new", "Дубликаты останавливаются до постановки в очередь"],
+    network: "Бинарный протокол asyncpg по TCP localhost:5432.",
+    state: ["INSERT строки в processed_updates со статусом received."],
+    risks: [{ level: "crash", label: "PG недоступен = update потерян" }],
     timing: "1-5ms",
     code: `<span class="kw">async def</span> mark_update_received(pool, update_id):
     row = <span class="kw">await</span> pool.fetchrow(
@@ -37,14 +37,14 @@ const hops = [
   },
   {
     icon: "📥",
-    name: "Enqueue (Redis)",
+    name: "Постановка в очередь (Redis)",
     file: "src/db/redis_client.py:32-34",
-    description: "The webhook serializes the Pydantic Job and pushes it to Redis.",
-    input: ["Job model serialized to JSON", "queue:incoming or queue:manager"],
-    output: ["Job appended to Redis list head via LPUSH"],
-    network: "RESP protocol over TCP localhost:6379.",
-    state: ["Redis list queue:incoming receives one JSON entry."],
-    risks: [{ level: "none", label: "Fast local write" }],
+    description: "Webhook сериализует Pydantic Job и кладёт его в Redis.",
+    input: ["Модель Job, сериализованная в JSON", "queue:incoming или queue:manager"],
+    output: ["Job добавлен в начало Redis list через LPUSH"],
+    network: "RESP-протокол по TCP localhost:6379.",
+    state: ["Redis list queue:incoming получает одну JSON-запись."],
+    risks: [{ level: "none", label: "Быстрая локальная запись" }],
     timing: "< 1ms",
     code: `<span class="kw">async def</span> enqueue_job(self, queue_name, job):
     payload = job.model_dump_json()
@@ -53,15 +53,15 @@ const hops = [
   },
   {
     icon: "📤",
-    name: "BRPOP (Worker)",
+    name: "BRPOP (воркер)",
     file: "src/db/redis_client.py:36-43",
-    description: "The worker blocks on Redis and destructively removes the next job.",
-    input: ["No explicit input; persistent blocking Redis read"],
-    output: ["Job model or None after 5s timeout"],
-    network: "Persistent TCP connection to localhost:6379.",
-    state: ["Redis removes the job from queue:incoming on successful BRPOP."],
-    risks: [{ level: "crash", label: "Destructive dequeue" }],
-    timing: "0-5s",
+    description: "Воркер блокируется на Redis и разрушительно забирает следующий job.",
+    input: ["Явного входа нет; постоянное блокирующее чтение из Redis"],
+    output: ["Модель Job или None после timeout 5 секунд"],
+    network: "Постоянное TCP-соединение с localhost:6379.",
+    state: ["Redis удаляет job из queue:incoming при успешном BRPOP."],
+    risks: [{ level: "crash", label: "Разрушительное чтение" }],
+    timing: "0-5 сек",
     code: `<span class="kw">async def</span> dequeue_job(self, queue_name, timeout=<span class="num">5</span>):
     result = <span class="kw">await</span> self.redis.brpop(queue_name, timeout=timeout)
     <span class="kw">if not</span> result:
@@ -71,14 +71,14 @@ const hops = [
   },
   {
     icon: "🔐",
-    name: "User Lock (Redis)",
+    name: "Пользовательский lock (Redis)",
     file: "src/db/redis_client.py:45-47",
-    description: "A per-chat lock prevents concurrent LLM/render work for one user.",
-    input: ["chat_id from Job"],
-    output: ["Boolean lock acquisition result"],
+    description: "Lock на chat_id не даёт параллельно запускать LLM/render для одного пользователя.",
+    input: ["chat_id из Job"],
+    output: ["Булевый результат захвата lock"],
     network: "Redis SET NX EX on localhost.",
     state: ["SET lock:user:{chat_id} 1 NX EX 180"],
-    risks: [{ level: "timeout", label: "TTL can expire" }, { level: "crash", label: "Dropped after 5 retries" }],
+    risks: [{ level: "timeout", label: "TTL может истечь" }, { level: "crash", label: "Drop после 5 retry" }],
     timing: "< 1ms",
     code: `<span class="kw">async def</span> acquire_user_lock(self, chat_id, ttl=<span class="num">180</span>):
     key = <span class="str">f"lock:user:{chat_id}"</span>
@@ -87,14 +87,14 @@ const hops = [
   },
   {
     icon: "🗃️",
-    name: "Load State (PG)",
+    name: "Загрузка состояния (PG)",
     file: "src/queue/worker.py:181-186",
-    description: "Worker gathers profile, FSM state, and recent history before prompting.",
+    description: "Воркер собирает профиль, FSM-состояние и последние сообщения перед prompt.",
     input: ["chat_id", "max_context_messages=20"],
-    output: ["client dict", "conversation_state dict", "chat history list"],
-    network: "3-4 sequential asyncpg queries over localhost:5432.",
-    state: ["Reads clients, conversation_state, chat_messages."],
-    risks: [{ level: "timeout", label: "Sequential DB latency" }],
+    output: ["dict клиента", "dict conversation_state", "список истории диалога"],
+    network: "3-4 последовательных asyncpg-запроса к localhost:5432.",
+    state: ["Чтение clients, conversation_state, chat_messages."],
+    risks: [{ level: "timeout", label: "Последовательная DB latency" }],
     timing: "3-20ms",
     code: `client = <span class="kw">await</span> postgres.get_client_by_chat_id(pg_pool, job.chat_id)
 <span class="kw">if not</span> client:
@@ -104,14 +104,14 @@ history = <span class="kw">await</span> postgres.get_chat_messages(pg_pool, job.
   },
   {
     icon: "🕒",
-    name: "Load Slots (PG)",
+    name: "Загрузка слотов (PG)",
     file: "src/engine/measurement_service.py:83-129",
-    description: "The worker preloads available measurement times for the next three days.",
-    input: ["Current date", "3-day range", "timezone"],
-    output: ["dict[str, list[str]] of available slots"],
-    network: "One asyncpg query per day against measurements.",
-    state: ["Reads measurements where status in scheduled/confirmed."],
-    risks: [{ level: "timeout", label: "N+days queries" }],
+    description: "Воркер заранее подгружает доступные времена замеров на ближайшие три дня.",
+    input: ["Текущая дата", "диапазон 3 дня", "timezone"],
+    output: ["dict[str, list[str]] со свободными слотами"],
+    network: "Один asyncpg-запрос в день к таблице measurements.",
+    state: ["Чтение measurements, где status в scheduled/confirmed."],
+    risks: [{ level: "timeout", label: "Запросы N+days" }],
     timing: "3-30ms",
     code: `<span class="kw">async def</span> get_available_slots(pool, date, timezone, duration_minutes=<span class="num">60</span>):
     rows = <span class="kw">await</span> pool.fetch(
@@ -122,14 +122,14 @@ history = <span class="kw">await</span> postgres.get_chat_messages(pg_pool, job.
   },
   {
     icon: "🧠",
-    name: "Build Prompt",
+    name: "Сборка prompt",
     file: "src/llm/prompt_builder.py:86-185",
-    description: "A pure function assembles role, tools, FSM, slots, history, and user text.",
-    input: ["user text", "client", "state", "history", "available slots"],
-    output: ["Prompt string around 2000-5000 chars"],
-    network: "None. Pure CPU work inside worker process.",
-    state: ["No state changes."],
-    risks: [{ level: "none", label: "Pure function" }],
+    description: "Чистая функция собирает роль, tools, FSM, слоты, историю и текст пользователя.",
+    input: ["текст пользователя", "client", "state", "history", "available slots"],
+    output: ["Строка prompt примерно на 2000-5000 символов"],
+    network: "Нет. Чистая CPU-работа внутри процесса воркера.",
+    state: ["Изменений состояния нет."],
+    risks: [{ level: "none", label: "Чистая функция" }],
     timing: "< 1ms",
     code: `<span class="kw">def</span> build_prompt(user_message, client_profile, conversation_state, chat_messages, available_slots=None):
     state = conversation_state <span class="kw">or</span> {<span class="str">"mode"</span>: <span class="str">"idle"</span>}
@@ -140,13 +140,13 @@ history = <span class="kw">await</span> postgres.get_chat_messages(pg_pool, job.
     icon: "🤖",
     name: "Gemini CLI (subprocess)",
     file: "src/llm/executor.py:81-135",
-    description: "The worker forks gemini, streams prompt through stdin, and enforces a hard timeout.",
-    input: ["Prompt string via stdin pipe"],
-    output: ["Cleaned stdout string; JSON expected"],
-    network: "Child process uses HTTPS to generativelanguage.googleapis.com with OAuth from ~/.gemini/.",
-    state: ["Semaphore counter in memory: max 2 concurrent LLM calls."],
-    risks: [{ level: "timeout", label: "90s hard timeout" }, { level: "crash", label: "OAuth expiry" }],
-    timing: "5-90s",
+    description: "Воркер запускает gemini, передаёт prompt через stdin и держит жёсткий timeout.",
+    input: ["Строка prompt через stdin pipe"],
+    output: ["Очищенная строка stdout; ожидается JSON"],
+    network: "Дочерний процесс ходит по HTTPS к generativelanguage.googleapis.com, OAuth берётся из ~/.gemini/.",
+    state: ["Счётчик semaphore в памяти: максимум 2 одновременных LLM-вызова."],
+    risks: [{ level: "timeout", label: "Жёсткий timeout 90 сек" }, { level: "crash", label: "Истёк OAuth" }],
+    timing: "5-90 сек",
     code: `proc = <span class="kw">await</span> asyncio.create_subprocess_exec(
     settings.llm_cli_command,
     stdin=asyncio.subprocess.PIPE,
@@ -158,14 +158,14 @@ stdout, stderr = <span class="kw">await</span> asyncio.wait_for(proc.communicate
   },
   {
     icon: "🧩",
-    name: "Parse Response",
+    name: "Парсинг ответа",
     file: "src/llm/actions_parser.py:90-99",
-    description: "The parser recovers JSON from raw LLM output and validates action contracts.",
-    input: ["Raw LLM stdout string"],
-    output: ["ActionsJson or fallback reply"],
-    network: "None. Pure CPU parse and Pydantic validation.",
-    state: ["No durable state. Invalid output becomes fallback."],
-    risks: [{ level: "none", label: "Never raises" }],
+    description: "Парсер достаёт JSON из сырого LLM output и валидирует контракты actions.",
+    input: ["Сырая строка stdout от LLM"],
+    output: ["ActionsJson или fallback-ответ"],
+    network: "Нет. CPU-парсинг и Pydantic-валидация.",
+    state: ["Durable state не меняется. Невалидный output превращается в fallback."],
+    risks: [{ level: "none", label: "Не выбрасывает исключения" }],
     timing: "< 1ms",
     code: `<span class="kw">def</span> parse_actions(raw_output):
     <span class="kw">try</span>:
@@ -176,15 +176,15 @@ stdout, stderr = <span class="kw">await</span> asyncio.wait_for(proc.communicate
   },
   {
     icon: "⚙️",
-    name: "Apply Actions",
+    name: "Применение actions",
     file: "src/llm/actions_applier.py:24-143",
-    description: "Validated actions mutate state, render images, create orders, or schedule measurements.",
+    description: "Валидные actions меняют state, рендерят изображения, создают заказы или замеры.",
     input: ["ActionsJson", "chat_id", "state", "pg_pool"],
-    output: ["render_paths", "price", "measurement/order metadata"],
-    network: "PostgreSQL writes, optional Telegram manager notification, thread executor for renderer.",
+    output: ["render_paths", "price", "metadata замера/заказа"],
+    network: "Записи в PostgreSQL, опциональные уведомления менеджерам в Telegram, thread executor для renderer.",
     state: ["UPSERT conversation_state", "INSERT orders/measurements", "UPDATE clients."],
-    risks: [{ level: "crash", label: "Render has no timeout" }],
-    timing: "1-30s",
+    risks: [{ level: "crash", label: "У render нет timeout" }],
+    timing: "1-30 сек",
     code: `<span class="kw">if</span> actions.actions.get(<span class="str">"render_partition"</span>):
     params = RenderPartitionAction(**actions.actions[<span class="str">"render_partition"</span>])
     render_result = <span class="kw">await</span> render_partition(params, request_id, settings)
@@ -193,14 +193,14 @@ stdout, stderr = <span class="kw">await</span> asyncio.wait_for(proc.communicate
   },
   {
     icon: "📡",
-    name: "Send Reply (TG API)",
+    name: "Отправка ответа (TG API)",
     file: "src/queue/worker.py:196-203",
-    description: "The worker records an outbound event, sends Telegram API request, then marks sent.",
-    input: ["reply_text", "optional render image paths"],
-    output: ["Telegram message/photo response"],
+    description: "Воркер записывает outbound event, отправляет запрос в Telegram API и помечает событие sent.",
+    input: ["reply_text", "опциональные пути к render images"],
+    output: ["Ответ Telegram message/photo"],
     network: "HTTPS POST to api.telegram.org:443.",
     state: ["INSERT outbound_events pending", "UPDATE outbound_events sent."],
-    risks: [{ level: "crash", label: "Duplicate if send succeeds but DB update fails" }],
+    risks: [{ level: "crash", label: "Дубликат, если send успешен, а DB update упал" }],
     timing: "100-500ms",
     code: `event_id = <span class="kw">await</span> postgres.insert_outbound_event(pg_pool, chat_id=chat_id, reply_text=text)
 <span class="kw">await</span> sender.send_message(token, chat_id, text, reply_markup=reply_markup)
@@ -208,14 +208,14 @@ stdout, stderr = <span class="kw">await</span> asyncio.wait_for(proc.communicate
   },
   {
     icon: "💾",
-    name: "Save History (PG)",
+    name: "Сохранение истории (PG)",
     file: "src/db/postgres.py:194-200",
-    description: "The user and assistant messages are appended to chat history.",
-    input: ["user text", "assistant reply", "update_id"],
-    output: ["Two chat_messages rows", "processed_updates completed"],
-    network: "asyncpg writes over localhost:5432.",
+    description: "Сообщения пользователя и ассистента добавляются в историю диалога.",
+    input: ["текст пользователя", "ответ ассистента", "update_id"],
+    output: ["Две строки chat_messages", "processed_updates переведён в completed"],
+    network: "asyncpg-записи через localhost:5432.",
     state: ["INSERT chat_messages x2", "UPDATE processed_updates status='completed'."],
-    risks: [{ level: "timeout", label: "Late DB failure marks job failed" }],
+    risks: [{ level: "timeout", label: "Поздний DB failure пометит job failed" }],
     timing: "2-10ms",
     code: `<span class="kw">await</span> postgres.insert_chat_message(pg_pool, job.chat_id, <span class="str">"user"</span>, job.text)
 <span class="kw">await</span> postgres.insert_chat_message(pg_pool, job.chat_id, <span class="str">"assistant"</span>, parsed.reply_text)
@@ -223,14 +223,14 @@ stdout, stderr = <span class="kw">await</span> asyncio.wait_for(proc.communicate
   },
   {
     icon: "🔓",
-    name: "Release Lock",
+    name: "Освобождение lock",
     file: "src/db/redis_client.py:49-50",
-    description: "The per-user Redis lock is removed in a finally block after processing.",
+    description: "Пользовательский Redis lock удаляется в finally-блоке после обработки.",
     input: ["chat_id"],
-    output: ["Redis DEL count"],
+    output: ["Количество удалённых ключей Redis DEL"],
     network: "Redis DEL over localhost:6379.",
-    state: ["Deletes lock:user:{chat_id}."],
-    risks: [{ level: "none", label: "finally cleanup" }],
+    state: ["Удаляется lock:user:{chat_id}."],
+    risks: [{ level: "none", label: "Очистка в finally" }],
     timing: "< 1ms",
     code: `<span class="kw">finally</span>:
     <span class="kw">await</span> redis_client.release_user_lock(job.chat_id)
@@ -242,13 +242,13 @@ stdout, stderr = <span class="kw">await</span> asyncio.wait_for(proc.communicate
     icon: "🔁",
     name: "Outbox Dispatcher",
     file: "src/queue/outbox_dispatcher.py:15-43",
-    description: "A background task retries pending outbound events every 15 seconds.",
-    input: ["pending outbound_events rows where attempts < 5"],
-    output: ["sent or failed status"],
-    network: "PostgreSQL polling plus Telegram HTTPS send retry.",
-    state: ["UPDATE attempts/last_attempt_at/error_message or status='failed'."],
-    risks: [{ level: "timeout", label: "At-least-once delivery" }],
-    timing: "15s poll interval",
+    description: "Фоновая задача повторяет отправку pending outbound events каждые 15 секунд.",
+    input: ["pending строки outbound_events, где attempts < 5"],
+    output: ["статус sent или failed"],
+    network: "Polling PostgreSQL плюс повторная отправка в Telegram по HTTPS.",
+    state: ["UPDATE attempts/last_attempt_at/error_message или status='failed'."],
+    risks: [{ level: "timeout", label: "At-least-once доставка" }],
+    timing: "интервал polling 15 сек",
     code: `<span class="kw">while</span> True:
     events = <span class="kw">await</span> postgres.get_pending_outbound(pg_pool, limit=<span class="num">20</span>)
     <span class="kw">for</span> event <span class="kw">in</span> events:
@@ -277,7 +277,7 @@ function renderNodes() {
     button.type = "button";
     button.dataset.index = String(index);
     button.innerHTML = `
-      <span class="hop-index"><span class="hop-icon">${hop.icon}</span>HOP ${index + 1}</span>
+      <span class="hop-index"><span class="hop-icon">${hop.icon}</span>Шаг ${index + 1}</span>
       <span class="hop-name">${hop.name}</span>
       <p class="hop-description">${hop.description}</p>
     `;
@@ -298,28 +298,28 @@ function riskBadges(risks) {
 
 function detailMarkup(hop, index) {
   return `
-    <div class="detail-kicker">Hop ${index + 1}</div>
+    <div class="detail-kicker">Шаг ${index + 1}</div>
     <h2 class="detail-title">${hop.name}</h2>
     <div class="file-ref">${hop.file}</div>
     <div class="detail-grid">
       <section class="detail-section">
-        <h3>Input / Output</h3>
-        ${list([`Input: ${hop.input.join("; ")}`, `Output: ${hop.output.join("; ")}`])}
+        <h3>Вход / выход</h3>
+        ${list([`Вход: ${hop.input.join("; ")}`, `Выход: ${hop.output.join("; ")}`])}
       </section>
       <section class="detail-section">
-        <h3>Network / IPC</h3>
+        <h3>Сеть / IPC</h3>
         <p>${hop.network}</p>
       </section>
       <section class="detail-section">
-        <h3>Code snippet</h3>
+        <h3>Фрагмент кода</h3>
         <pre class="code-block"><code>${hop.code}</code></pre>
       </section>
       <section class="detail-section">
-        <h3>State changes</h3>
+        <h3>Изменения состояния</h3>
         ${list(hop.state)}
       </section>
       <section class="detail-section">
-        <h3>Risk / Timing</h3>
+        <h3>Риски / время</h3>
         <div class="badge-row">${riskBadges(hop.risks)}<span class="timing-badge">${hop.timing}</span></div>
       </section>
     </div>
@@ -415,12 +415,12 @@ function drawConnectors() {
 
 function setPlaying(nextPlaying) {
   if (nextPlaying) {
-    playToggle.textContent = "Pause";
+    playToggle.textContent = "Пауза";
     playTimer = window.setInterval(() => {
       selectHop((activeIndex + 1) % hops.length, true);
     }, 3000);
   } else {
-    playToggle.textContent = "Play";
+    playToggle.textContent = "Старт";
     window.clearInterval(playTimer);
     playTimer = null;
   }
