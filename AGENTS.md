@@ -238,12 +238,376 @@ Open `docs/architecture-viz/index.html` in a browser. All 15 hops must be visibl
 
 ---
 
+---
+
+## PHASE 6: Reliability Hardening (READ EVERY LINE)
+
+Phase 4 (Mini App UI) and Phase 5 (Architecture Viz) are COMPLETE.
+Now fix the 5 critical reliability problems found during architecture review.
+
+### 6.1. Safe queue with processing list (replace destructive BRPOP)
+
+**Problem**: `BRPOP` removes the job from Redis the moment it's read. If the worker crashes between BRPOP and completion, the job is **permanently lost** — user gets no response, lock stays for 180s.
+
+**Fix**: Use Redis `LMOVE` (Redis 6.2+) to atomically move job from `queue:incoming` to `queue:processing`. After success, `LREM` from `queue:processing`. On startup, recover stuck jobs.
+
+**File to modify**: `src/db/redis_client.py`
+
+Add these methods to `RedisClient`:
+
+```python
+async def dequeue_job_safe(self, queue_name: str, processing_name: str, timeout: int = 5) -> Optional[Job]:
+    """Move job from queue to processing list atomically."""
+    # BRPOPLPUSH equivalent using BLMOVE (Redis 6.2+)
+    # Falls back to BRPOP + LPUSH if BLMOVE unavailable
+    client = self._require_client()
+    try:
+        payload = await client.execute_command(
+            "BLMOVE", queue_name, processing_name, "RIGHT", "LEFT", timeout
+        )
+    except Exception:
+        # Fallback for older Redis
+        result = await client.brpop(queue_name, timeout=timeout)
+        if not result:
+            return None
+        _, payload = result
+        await client.lpush(processing_name, payload)
+    if not payload:
+        return None
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    return Job.model_validate(json.loads(payload))
+
+async def ack_job(self, processing_name: str, job: Job) -> None:
+    """Remove completed job from the processing list."""
+    payload = job.model_dump_json()
+    await self._require_client().lrem(processing_name, 1, payload)
+
+async def recover_stuck_jobs(self, processing_name: str, queue_name: str) -> int:
+    """On startup: move any stuck jobs from processing back to queue."""
+    client = self._require_client()
+    count = 0
+    while True:
+        payload = await client.rpoplpush(processing_name, queue_name)
+        if payload is None:
+            break
+        count += 1
+    return count
+```
+
+**File to modify**: `src/queue/worker.py`
+
+In `_client_loop()` (line 372-376), replace:
+```python
+# OLD:
+job = await redis_client.dequeue_job("queue:incoming", timeout=5)
+```
+with:
+```python
+# NEW:
+job = await redis_client.dequeue_job_safe("queue:incoming", "queue:processing:client", timeout=5)
+```
+
+At the END of `process_client_job()`, in the `finally` block (after lock release), add:
+```python
+await redis_client.ack_job("queue:processing:client", job)
+```
+
+In `run_worker()` (line 386), BEFORE creating tasks, add recovery:
+```python
+recovered = await redis_client.recover_stuck_jobs("queue:processing:client", "queue:incoming")
+if recovered:
+    logger.info("recovered_stuck_jobs", extra={"count": recovered, "queue": "client"})
+recovered_mgr = await redis_client.recover_stuck_jobs("queue:processing:manager", "queue:manager")
+if recovered_mgr:
+    logger.info("recovered_stuck_jobs", extra={"count": recovered_mgr, "queue": "manager"})
+```
+
+Do the same for `_manager_loop()` using `"queue:processing:manager"`.
+
+### 6.2. Redis reconnection in worker loops
+
+**Problem**: `_client_loop` and `_manager_loop` have no try/except. If Redis connection drops, exception propagates to `asyncio.gather()` and kills ALL three worker tasks (client, manager, outbox).
+
+**Fix**: Wrap each loop iteration in try/except with reconnection logic.
+
+**File to modify**: `src/queue/worker.py`
+
+Replace `_client_loop()` (lines 372-376) with:
+```python
+async def _client_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
+    while True:
+        try:
+            job = await redis_client.dequeue_job_safe("queue:incoming", "queue:processing:client", timeout=5)
+            if job is not None:
+                await process_client_job(job, pg_pool, redis_client, sender)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("client_loop_error", extra={"error": str(exc)})
+            await asyncio.sleep(5)  # backoff before retry
+```
+
+Same pattern for `_manager_loop()`.
+
+### 6.3. Render subprocess with timeout (replace thread executor)
+
+**Problem**: `render_partition()` runs the 3D renderer in `run_in_executor(None, _sync_render, ...)` — a thread with **no timeout**. If trimesh/pyrender hangs, the thread blocks forever. The user lock expires after 180s but the thread stays alive consuming resources.
+
+**Fix**: Run the renderer in a **subprocess** (like Gemini CLI) with a hard timeout and SIGKILL.
+
+**File to modify**: `src/engine/render_engine.py`
+
+Replace `render_partition()` (lines 76-81) and add a subprocess-based approach:
+
+```python
+import signal
+import sys
+
+_RENDER_TIMEOUT = 120  # seconds — generous for 3D rendering
+
+async def render_partition(params: RenderPartitionAction, request_id: str, settings) -> dict[str, Any]:
+    render_params = _render_params(params)
+    output_dir = Path(settings.renders_dir) / request_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Serialize params to temp JSON for subprocess
+    import json as _json
+    import tempfile
+    params_file = output_dir / "_render_params.json"
+    params_file.write_text(_json.dumps(render_params))
+
+    # Run renderer in isolated subprocess with timeout
+    script = f"""
+import sys, os, json
+os.environ["OUTPUT_DIR"] = {str(output_dir)!r}
+sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r})
+params = json.loads(open({str(params_file)!r}).read())
+from src.render.create_partition import generate_from_params
+from src.utils.config_manager import config
+generate_from_params(params, {{"materials": config.get_section("materials")}})
+"""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+        env={**os.environ, "PYOPENGL_PLATFORM": "egl"},
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=_RENDER_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await process.wait()
+        raise TimeoutError(f"3D render timed out after {_RENDER_TIMEOUT}s")
+
+    if process.returncode != 0:
+        raise RuntimeError(f"Renderer failed: {stderr.decode('utf-8', errors='ignore')[:500]}")
+
+    # Cleanup temp file
+    params_file.unlink(missing_ok=True)
+
+    render_paths = _collect_render_paths(output_dir)
+    if not render_paths:
+        raise RuntimeError("Renderer did not produce PNG files")
+    return {"render_paths": render_paths}
+```
+
+Keep `_sync_render()` in the file (do NOT delete it) — it's used by tests. Just don't call it from `render_partition()` anymore.
+
+### 6.4. Gemini CLI health check
+
+**Problem**: If Gemini CLI OAuth token expires, ALL LLM calls fail silently with cryptic errors. Nobody knows until users complain. There is no monitoring.
+
+**Fix**: Add a periodic health check task that runs a tiny test prompt every 10 minutes. If it fails, log a CRITICAL-level error.
+
+**File to create**: `src/llm/health_check.py`
+
+```python
+"""Periodic Gemini CLI health check."""
+
+from __future__ import annotations
+
+import asyncio
+
+from src.llm.executor import call_llm
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
+_HEALTH_PROMPT = 'Respond with exactly: {"reply_text":"ok","actions":null}'
+_CHECK_INTERVAL = 600  # 10 minutes
+_gemini_healthy = True
+
+
+def is_gemini_healthy() -> bool:
+    return _gemini_healthy
+
+
+async def run_gemini_health_check(interval: int = _CHECK_INTERVAL) -> None:
+    global _gemini_healthy
+    # Wait 30s after startup before first check
+    await asyncio.sleep(30)
+    while True:
+        try:
+            result = await call_llm(_HEALTH_PROMPT)
+            if "ok" in result.lower():
+                if not _gemini_healthy:
+                    logger.info("gemini_health_recovered")
+                _gemini_healthy = True
+            else:
+                logger.warning("gemini_health_unexpected_output", extra={"output": result[:200]})
+                _gemini_healthy = True  # output is unexpected but CLI is reachable
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _gemini_healthy = False
+            logger.critical(
+                "gemini_health_check_failed",
+                extra={"error": str(exc)},
+            )
+        await asyncio.sleep(interval)
+```
+
+**File to modify**: `src/queue/worker.py`
+
+In `run_worker()`, add the health check as a 4th concurrent task:
+```python
+from src.llm.health_check import run_gemini_health_check
+
+# Inside run_worker(), add to tasks list:
+tasks = [
+    asyncio.create_task(_client_loop(pg_pool, redis_client, telegram_sender)),
+    asyncio.create_task(_manager_loop(pg_pool, redis_client, telegram_sender)),
+    asyncio.create_task(run_outbox_dispatcher(pg_pool, telegram_sender)),
+    asyncio.create_task(run_gemini_health_check()),  # NEW
+]
+```
+
+Also expose health status in the webhook health endpoint:
+
+**File to modify**: `src/bot/webhook.py`
+
+In `health()` function, add Gemini status:
+```python
+from src.llm.health_check import is_gemini_healthy
+
+async def health(request: web.Request) -> web.Response:
+    return web.json_response({
+        "ok": True,
+        "service": "shermos-webhook",
+        "gemini_healthy": is_gemini_healthy(),
+    })
+```
+
+### 6.5. Outbox idempotency (prevent duplicate messages)
+
+**Problem**: `_send_and_record()` does: INSERT outbound_event → send_message → mark_sent. If send succeeds but mark_sent crashes (PG error, worker killed), the outbox dispatcher re-sends → **user receives duplicate**.
+
+**Fix**: Add a `telegram_message_id` column to `outbound_events`. After successful send, store the Telegram message ID. In the outbox dispatcher, skip events that already have a `telegram_message_id` set.
+
+**File to create**: `migrations/011_outbox_idempotency.sql`
+
+```sql
+ALTER TABLE outbound_events ADD COLUMN IF NOT EXISTS telegram_message_id BIGINT;
+ALTER TABLE outbound_events ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_idempotency ON outbound_events (idempotency_key) WHERE idempotency_key IS NOT NULL;
+```
+
+**File to modify**: `src/db/postgres.py`
+
+In `mark_outbound_sent()`, update to also save the Telegram message ID:
+```python
+async def mark_outbound_sent(pool, event_id: int, telegram_message_id: int | None = None) -> None:
+    await pool.execute(
+        "UPDATE outbound_events SET status='sent', sent_at=now(), telegram_message_id=$2 WHERE id=$1",
+        event_id, telegram_message_id,
+    )
+```
+
+**File to modify**: `src/bot/telegram_sender.py`
+
+`send_message()` should return the Telegram message ID from the response:
+```python
+async def send_message(self, token, chat_id, text, reply_markup=None) -> int | None:
+    # ... existing code ...
+    data = await self._post_json(token, "sendMessage", payload)
+    return data.get("result", {}).get("message_id")
+```
+
+**File to modify**: `src/queue/worker.py`
+
+In `_send_and_record()`, capture and save the message ID:
+```python
+msg_id = await sender.send_message(token, chat_id, text, reply_markup=reply_markup)
+await postgres.mark_outbound_sent(pg_pool, event_id, telegram_message_id=msg_id)
+```
+
+**File to modify**: `src/queue/outbox_dispatcher.py`
+
+In `dispatch_once()`, skip events that already have a `telegram_message_id`:
+```python
+# After getting events, filter:
+for event in events:
+    if event.get("telegram_message_id"):
+        # Already sent, just mark as sent (recovery from partial failure)
+        await postgres.mark_outbound_sent(pg_pool, int(event["id"]), int(event["telegram_message_id"]))
+        continue
+    # ... existing send logic ...
+```
+
+### 6.6. Tests for new reliability code
+
+**File to create**: `tests/test_reliability.py`
+
+Write these tests:
+1. `test_dequeue_safe_moves_to_processing` — mock Redis, verify BLMOVE called
+2. `test_ack_job_removes_from_processing` — mock Redis, verify LREM
+3. `test_recover_stuck_jobs_moves_back` — mock rpoplpush loop
+4. `test_client_loop_survives_redis_error` — mock Redis to raise, verify loop continues after sleep
+5. `test_gemini_health_check_sets_flag` — mock call_llm success → `is_gemini_healthy()` True
+6. `test_gemini_health_check_failure_sets_flag` — mock call_llm raise → `is_gemini_healthy()` False
+7. `test_outbox_skips_already_sent` — event with telegram_message_id → mark_sent called, send_message NOT called
+8. `test_render_timeout_kills_subprocess` — mock subprocess to hang, verify TimeoutError raised
+
+All tests use monkeypatch/mock, no real Redis/PG needed.
+
+Run: `cd /Users/mosesvasilenko/shermos-bot && .venv/bin/python -m pytest tests/test_reliability.py -v`
+
+### RULES FOR CODEX
+
+1. **Modify only the files listed above** — do not refactor unrelated code.
+2. **Keep backward compatibility** — `dequeue_job()` stays (for tests), new `dequeue_job_safe()` is added alongside.
+3. **Keep `_sync_render()`** function in render_engine.py — just stop calling it from `render_partition()`.
+4. **New migration** `011_outbox_idempotency.sql` must be idempotent (IF NOT EXISTS).
+5. **All existing tests must still pass** after changes.
+6. **Run both old and new tests**: `.venv/bin/python -m pytest --cov=src --cov-report=term-missing`
+7. **Do NOT touch** mini-app/, docs/, .env, GEMINI.md, run.sh.
+8. **Single commit** with message: `"feat: reliability hardening — safe queue, reconnection, render timeout, health check, outbox idempotency"`
+
+### File Checklist
+
+- [ ] `src/db/redis_client.py` — add `dequeue_job_safe()`, `ack_job()`, `recover_stuck_jobs()`
+- [ ] `src/queue/worker.py` — safe dequeue, try/except loops, recovery on startup, health check task
+- [ ] `src/engine/render_engine.py` — subprocess-based render with timeout
+- [ ] `src/llm/health_check.py` — NEW file, periodic Gemini health check
+- [ ] `src/bot/webhook.py` — expose gemini_healthy in /health
+- [ ] `src/bot/telegram_sender.py` — return message_id from send_message()
+- [ ] `src/db/postgres.py` — mark_outbound_sent() accepts telegram_message_id
+- [ ] `src/queue/outbox_dispatcher.py` — skip already-sent events
+- [ ] `migrations/011_outbox_idempotency.sql` — NEW migration
+- [ ] `tests/test_reliability.py` — NEW test file with 8 tests
+
+---
+
 ## COMMIT ORDER (IMPORTANT)
 
-1. **First commit**: Phase 4 changes only (mini-app/ files). Message: `"feat: redesign Mini App UI with premium design system"`
-2. **Second commit**: Phase 5 (docs/architecture-viz/). Message: `"feat: add interactive architecture visualization site"`
-
-DO NOT mix Phase 4 and Phase 5 in the same commit.
+Phase 4 and Phase 5 are already committed. Phase 6 is a single commit.
 
 ---
 
