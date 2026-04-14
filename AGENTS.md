@@ -6,12 +6,19 @@
 
 ## ⚡ CURRENT STATUS (2026-04-14 — READ FIRST)
 
-Phases 0-4 COMPLETE. Backend deployed, all services running. Mini App UI redesigned.
-79 tests, 91.77% coverage. Backend is DONE — **do NOT touch backend Python files**.
+Phases 0-7 COMPLETE. Backend deployed, all services running. Mini App UI redesigned.
+Reliability hardening done. 87 tests, 91.32% coverage.
 
 ### What REMAINS — your task now:
 
-**PHASE 5: Architecture Visualization Site (SEPARATE COMMIT)**
+**PHASE 8: Database-Driven Pricing (CRITICAL — prices are wrong!)**
+
+Then later: Phase 9+ (Gemini pro admin, extended materials).
+
+**Skip to PHASE 8 section below.**
+
+### Completed phases (do not re-execute):
+- Phase 5: Architecture Visualization Site
 
 Create a standalone interactive animated website that explains how a Telegram message travels through the Shermos system. This site lives in `docs/architecture-viz/` and is built with vanilla HTML + CSS + JS (no frameworks).
 
@@ -828,33 +835,453 @@ Use flexbox row with arrow separators.
 
 ---
 
-## PHASE 8: Database-Driven Pricing & Materials
+## PHASE 8: Correct Pricing from Real Price List + DB-Driven System
 
-**Execute ONLY after Phase 6 and 7 are done.**
+**Phase 6 & 7 are DONE. Execute Phase 8 NOW.**
 
-### The Problem
+### The Problem (CRITICAL — customers are being overcharged)
 
-`pricing_engine.py` uses hardcoded values: base rate $180/sqm, handle $80, glass modifier 1.15×, frame modifier 1.04×, sections 0.015 per extra, discount 6%/8sqm. The `prices` table exists in DB, the API allows editing, but `calculate_price()` **ignores the DB entirely**. Manager thinks they're changing prices, but nothing changes.
+The real price list (from PDF) shows prices vary by **partition type** AND **glass type**:
 
-Similarly, material properties (glass colors, frame roughness) come from `config/app_config.json` file, not DB. The `materials` table is seeded from config on startup but the render engine reads from file, not DB.
+| Тип перегородки | Прозрачное/Серое/Бронза | Рифлёное |
+|---|---|---|
+| Стационарная | **$130/м²** | **$150/м²** |
+| Раздвижная 2 створки | **$150/м²** | **$170/м²** |
+| Раздвижная 3 створки | **$160/м²** | **$180/м²** |
+| Раздвижная 4 створки | **$160/м²** | **$180/м²** |
+
+Additional charges (per sqm, additive):
+| Опция | Наценка |
+|---|---|
+| Сплошная матировка | +$7/м² |
+| Матовые полосы | +$12/м² |
+| Матовый рисунок (логотип) | +$19/м² |
+| Сложный рисунок вставок | +$3/м² |
+| Рамка не чёрная | +4% от итога |
+| Площадь > 8 м² | −6% скидка |
+
+Current code has WRONG values:
+- Uses flat $180/sqm for ALL types (should be $130-$180 depending on type)
+- Charges +15% for gray/bronze glass (should be $0 — same price as transparent!)
+- Missing: partition_type, matting options, pattern surcharge
+- `RenderPartitionAction` model has no `partition_type` field
+- `calculate_price()` ignores the DB prices table
 
 ### Solution Architecture
 
-Three changes:
-1. **Add `price_modifier` column to `materials`** table — stores the multiplier per material
-2. **Create `PricingCache`** — in-memory cache that loads prices + materials from DB with 5-min TTL
-3. **Rewrite `calculate_price()`** — reads from cache, not hardcoded values
-4. **Rewrite `_render_params()`** — reads material colors from DB cache, not config file
-5. **Expand seed data** — more granular price rows for all configurable parameters
-6. **Update Mini App PricingEditor** — show editable price rows with human-readable names
+Five changes:
+1. **Add `partition_type` field** to RenderPartitionAction model and prompt/tools schema
+2. **Create price matrix in DB** — base rate depends on (partition_type, glass_category)
+3. **Add matting/pattern addon prices** to DB
+4. **Create `PricingCache`** — in-memory cache with 5-min TTL
+5. **Rewrite `calculate_price()`** — use matrix from cache, correct formula
+6. **Update materials in DB** — add price_modifier column
+7. **Update render engine** — read material colors from cache, not config file
+8. **Update Mini App PricingEditor** — editable prices grouped by category
+9. **Update models + tools schema** — add partition_type and matting fields
 
-### 8.1. Migration 012 — add price_modifier to materials + seed expanded prices
+### 8.1. Migration 012 — correct pricing schema
 
-**File to create**: `migrations/012_pricing_modifiers.sql`
+**File to create**: `migrations/012_correct_pricing.sql`
 
 ```sql
--- Add price_modifier column to materials
+-- NOTE: This migration fixes pricing to match the real price list from Shermos.
+
+-- Add price_modifier to materials (for frame non-black +4%)
 ALTER TABLE materials ADD COLUMN IF NOT EXISTS price_modifier NUMERIC(6, 3) NOT NULL DEFAULT 1.0;
+
+-- Set correct material modifiers
+-- Glass: NO price modifier (price difference is in base rate matrix, not modifier)
+UPDATE materials SET price_modifier = 1.0 WHERE kind = 'glass';
+-- Frame: black(1) and aluminum(3) = 1.0, others = 1.04
+UPDATE materials SET price_modifier = 1.0 WHERE id IN ('frame_1', 'frame_3');
+UPDATE materials SET price_modifier = 1.04 WHERE id IN ('frame_2', 'frame_4', 'frame_5');
+
+-- Delete old incorrect price rows
+DELETE FROM prices WHERE id IN ('base_sqm', 'handle', 'section_step', 'volume_discount_rate');
+
+-- Insert correct price matrix: base rates by (partition_type, glass_category)
+-- glass_category: "standard" = прозрачное/серое/бронза, "textured" = рифлёное
+INSERT INTO prices (id, name, category, amount, currency, metadata) VALUES
+    -- Стационарная (fixed, no sliding)
+    ('base_fixed_standard',    'Стационарная — стандартное стекло', 'base', 130, 'USD', '{"partition_type":"fixed","glass_category":"standard","unit":"sqm"}'::jsonb),
+    ('base_fixed_textured',    'Стационарная — рифлёное стекло',   'base', 150, 'USD', '{"partition_type":"fixed","glass_category":"textured","unit":"sqm"}'::jsonb),
+    -- Раздвижная 2 створки
+    ('base_sliding2_standard', 'Раздвижная 2 ств. — стандартное',  'base', 150, 'USD', '{"partition_type":"sliding_2","glass_category":"standard","unit":"sqm"}'::jsonb),
+    ('base_sliding2_textured', 'Раздвижная 2 ств. — рифлёное',     'base', 170, 'USD', '{"partition_type":"sliding_2","glass_category":"textured","unit":"sqm"}'::jsonb),
+    -- Раздвижная 3 створки
+    ('base_sliding3_standard', 'Раздвижная 3 ств. — стандартное',  'base', 160, 'USD', '{"partition_type":"sliding_3","glass_category":"standard","unit":"sqm"}'::jsonb),
+    ('base_sliding3_textured', 'Раздвижная 3 ств. — рифлёное',     'base', 180, 'USD', '{"partition_type":"sliding_3","glass_category":"textured","unit":"sqm"}'::jsonb),
+    -- Раздвижная 4 створки
+    ('base_sliding4_standard', 'Раздвижная 4 ств. — стандартное',  'base', 160, 'USD', '{"partition_type":"sliding_4","glass_category":"standard","unit":"sqm"}'::jsonb),
+    ('base_sliding4_textured', 'Раздвижная 4 ств. — рифлёное',     'base', 180, 'USD', '{"partition_type":"sliding_4","glass_category":"textured","unit":"sqm"}'::jsonb),
+    -- Доп. услуги (per sqm, additive)
+    ('addon_matting_solid',    'Сплошная матировка',   'addon', 7,  'USD', '{"unit":"sqm","addon_type":"matting_solid"}'::jsonb),
+    ('addon_matting_stripes',  'Матовые полосы',       'addon', 12, 'USD', '{"unit":"sqm","addon_type":"matting_stripes"}'::jsonb),
+    ('addon_matting_logo',     'Матовый рисунок',      'addon', 19, 'USD', '{"unit":"sqm","addon_type":"matting_logo"}'::jsonb),
+    ('addon_complex_pattern',  'Сложный рисунок вставок', 'addon', 3, 'USD', '{"unit":"sqm","addon_type":"complex_pattern"}'::jsonb),
+    ('addon_handle',           'Дверная ручка',        'addon', 80, 'USD', '{"unit":"piece","addon_type":"handle"}'::jsonb),
+    -- Модификаторы
+    ('mod_frame_nonblack',     'Наценка за цвет рамки', 'modifier', 4, '%', '{"description":"% к итогу за рамку не чёрного цвета"}'::jsonb),
+    ('mod_volume_discount',    'Скидка за объём',        'discount', 6, '%', '{"threshold_sqm":8,"description":"% скидка при площади > 8 м²"}'::jsonb)
+ON CONFLICT (id) DO UPDATE SET amount = EXCLUDED.amount, name = EXCLUDED.name, metadata = EXCLUDED.metadata;
+
+-- Update existing material names to Russian
+UPDATE materials SET name = 'Прозрачное' WHERE id = 'glass_1';
+UPDATE materials SET name = 'Серое' WHERE id = 'glass_2';
+UPDATE materials SET name = 'Бронза' WHERE id = 'glass_3';
+UPDATE materials SET name = 'Рифлёное' WHERE id = 'glass_4';
+UPDATE materials SET name = 'Чёрный матовый' WHERE id = 'frame_1';
+UPDATE materials SET name = 'Белый глянцевый' WHERE id = 'frame_2';
+UPDATE materials SET name = 'Алюминий' WHERE id = 'frame_3';
+UPDATE materials SET name = 'Бронза' WHERE id = 'frame_4';
+UPDATE materials SET name = 'Золото' WHERE id = 'frame_5';
+```
+
+### 8.2. Add `partition_type` and `matting` to models
+
+**File to modify**: `src/models.py`
+
+Add to `RenderPartitionAction`:
+```python
+partition_type: str = "sliding_2"  # fixed, sliding_2, sliding_3, sliding_4
+matting: str = "none"  # none, matting_solid, matting_stripes, matting_logo
+complex_pattern: bool = False  # сложный рисунок вставок
+```
+
+### 8.3. Update tools schema
+
+**File to modify**: `src/llm/tools_schema.py`
+
+Add `partition_type` and `matting` to the `render_partition` action description. Gemini must ask:
+- "Тип перегородки: стационарная, раздвижная 2/3/4 створки?"
+- "Нужна ли матировка? (нет / сплошная / полосы / рисунок)"
+
+### 8.4. PricingCache (NEW file)
+
+**File to create**: `src/engine/pricing_cache.py`
+
+```python
+"""In-memory cache for pricing config from database."""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from src.db import postgres
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
+
+_CACHE_TTL = 300  # 5 minutes
+
+
+class PricingCache:
+    def __init__(self, ttl: int = _CACHE_TTL):
+        self._ttl = ttl
+        self._prices: dict[str, dict[str, Any]] = {}
+        self._materials: dict[str, dict[str, Any]] = {}
+        self._loaded_at: float = 0.0
+
+    def is_stale(self) -> bool:
+        return time.monotonic() - self._loaded_at > self._ttl
+
+    async def ensure_loaded(self, pool) -> None:
+        if self._prices and not self.is_stale():
+            return
+        await self.reload(pool)
+
+    async def reload(self, pool) -> None:
+        prices_rows = await postgres.get_prices(pool)
+        materials_rows = await postgres.get_materials(pool)
+        self._prices = {row["id"]: row for row in prices_rows}
+        self._materials = {row["id"]: row for row in materials_rows}
+        self._loaded_at = time.monotonic()
+        logger.info("pricing_cache_reloaded", extra={"prices": len(self._prices), "materials": len(self._materials)})
+
+    def get_base_rate(self, partition_type: str, glass_type: str) -> float:
+        """Get base rate from price matrix. glass_type "4" = textured, others = standard."""
+        glass_cat = "textured" if str(glass_type) == "4" else "standard"
+        price_id = f"base_{partition_type}_{glass_cat}"
+        row = self._prices.get(price_id)
+        if row:
+            return float(row["amount"])
+        # Fallback: try sliding_2 standard
+        fallback = self._prices.get("base_sliding2_standard")
+        return float(fallback["amount"]) if fallback else 150.0
+
+    def get_addon_price(self, addon_type: str) -> float:
+        """Get per-sqm addon price (matting, handle, pattern)."""
+        for pid, row in self._prices.items():
+            meta = row.get("metadata") or {}
+            if meta.get("addon_type") == addon_type:
+                return float(row["amount"])
+        return 0.0
+
+    def get_frame_modifier_pct(self) -> float:
+        """Returns frame non-black modifier as decimal, e.g. 0.04."""
+        row = self._prices.get("mod_frame_nonblack")
+        return float(row["amount"]) / 100.0 if row else 0.04
+
+    def get_volume_discount(self) -> tuple[float, float]:
+        """Returns (rate_decimal, threshold_sqm)."""
+        row = self._prices.get("mod_volume_discount")
+        if row:
+            rate = float(row["amount"]) / 100.0
+            threshold = float((row.get("metadata") or {}).get("threshold_sqm", 8))
+            return rate, threshold
+        return 0.06, 8.0
+
+    def is_frame_nonblack(self, frame_color: str) -> bool:
+        """Check if frame color has a price modifier > 1.0."""
+        row = self._materials.get(f"frame_{frame_color}")
+        if row and row.get("price_modifier"):
+            return float(row["price_modifier"]) > 1.001
+        return str(frame_color) not in {"1", "3"}
+
+    def get_glass_color(self, glass_type: str) -> list[float]:
+        row = self._materials.get(f"glass_{glass_type}")
+        return row["color"] if row and row.get("color") else [0.85, 0.85, 0.85, 0.3]
+
+    def get_glass_roughness(self, glass_type: str) -> float:
+        row = self._materials.get(f"glass_{glass_type}")
+        return float(row["roughness"]) if row and row.get("roughness") is not None else 0.05
+
+    def get_frame_color(self, frame_color: str) -> list[float]:
+        row = self._materials.get(f"frame_{frame_color}")
+        return row["color"] if row and row.get("color") else [0.05, 0.05, 0.05, 1.0]
+
+
+pricing_cache = PricingCache()
+```
+
+### 8.5. Rewrite `calculate_price()` — correct formula
+
+**File to modify**: `src/engine/pricing_engine.py`
+
+Replace the entire function. Keep `_area()` unchanged. New `calculate_price()`:
+
+```python
+from src.engine.pricing_cache import PricingCache, pricing_cache
+
+def calculate_price(
+    shape: str,
+    height: float,
+    width_a: float,
+    width_b: float = 0,
+    width_c: float = 0,
+    glass_type: str = "1",
+    frame_color: str = "1",
+    rows: int = 1,
+    cols: int = 2,
+    add_handle: bool = False,
+    partition_type: str = "sliding_2",
+    matting: str = "none",
+    complex_pattern: bool = False,
+    cache: PricingCache | None = None,
+) -> dict[str, Any]:
+    pc = cache or pricing_cache
+    area = _area(shape, height, width_a, width_b or 0, width_c or 0)
+
+    # 1. Base rate from price matrix (partition_type × glass_category)
+    base_rate = pc.get_base_rate(partition_type, glass_type)
+    base_price = area * base_rate
+
+    # 2. Addons (per sqm, additive to base)
+    matting_price = 0.0
+    if matting != "none":
+        matting_rate = pc.get_addon_price(matting)
+        matting_price = area * matting_rate
+
+    pattern_price = 0.0
+    if complex_pattern:
+        pattern_rate = pc.get_addon_price("complex_pattern")
+        pattern_price = area * pattern_rate
+
+    handle_price = pc.get_addon_price("handle") if add_handle else 0.0
+
+    subtotal = base_price + matting_price + pattern_price
+
+    # 3. Frame color modifier (percentage of subtotal)
+    frame_surcharge = 0.0
+    if pc.is_frame_nonblack(frame_color):
+        frame_pct = pc.get_frame_modifier_pct()
+        frame_surcharge = subtotal * frame_pct
+
+    subtotal_with_frame = subtotal + frame_surcharge
+
+    # 4. Volume discount
+    discount_rate, discount_threshold = pc.get_volume_discount()
+    discount = subtotal_with_frame * discount_rate if area > discount_threshold else 0.0
+
+    total = subtotal_with_frame - discount + handle_price
+
+    return {
+        "total_price": round(total, 2),
+        "currency": "USD",
+        "details": {
+            "area_sq_m": area,
+            "partition_type": partition_type,
+            "base_rate_per_sqm": base_rate,
+            "base_price": round(base_price, 2),
+            "matting": matting,
+            "matting_price": round(matting_price, 2),
+            "complex_pattern_price": round(pattern_price, 2),
+            "frame_surcharge": round(frame_surcharge, 2),
+            "volume_discount": round(discount, 2),
+            "handle_price": handle_price,
+        },
+    }
+```
+
+### 8.6. Update `actions_applier.py`
+
+**File to modify**: `src/llm/actions_applier.py`
+
+Before `calculate_price()` call, add cache loading:
+```python
+from src.engine.pricing_cache import pricing_cache
+# ...
+await pricing_cache.ensure_loaded(pg_pool)
+```
+
+Pass new fields to `calculate_price()`:
+```python
+price = calculate_price(
+    shape=normalized["shape"],
+    height=float(normalized["height"]),
+    width_a=float(normalized["width_a"]),
+    width_b=float(normalized.get("width_b") or 0),
+    width_c=float(normalized.get("width_c") or 0),
+    glass_type=str(normalized.get("glass_type") or "1"),
+    frame_color=str(normalized.get("frame_color") or "1"),
+    rows=int(normalized.get("rows") or 1),
+    cols=int(normalized.get("cols") or 2),
+    add_handle=bool(normalized.get("add_handle")),
+    partition_type=str(normalized.get("partition_type") or "sliding_2"),
+    matting=str(normalized.get("matting") or "none"),
+    complex_pattern=bool(normalized.get("complex_pattern")),
+    cache=pricing_cache,
+)
+```
+
+### 8.7. Update render engine — use cache for materials
+
+**File to modify**: `src/engine/render_engine.py`
+
+Replace material lookups in `_render_params()` to use pricing_cache:
+```python
+from src.engine.pricing_cache import pricing_cache
+
+def _render_params(params: RenderPartitionAction) -> dict[str, Any]:
+    normalized = normalize_render_params(params.model_dump(exclude_none=True))
+    pc = pricing_cache
+    normalized["frame_color_id"] = normalized["frame_color"]
+    normalized["glass_type_id"] = normalized["glass_type"]
+    normalized["frame_color"] = pc.get_frame_color(normalized["frame_color"])
+    normalized["glass_color"] = pc.get_glass_color(normalized["glass_type"])
+    normalized["glass_roughness"] = pc.get_glass_roughness(normalized["glass_type"])
+    if params.door_section:
+        normalized["door_sections"] = [params.door_section]
+    if params.mullion_positions:
+        normalized.update(params.mullion_positions)
+    return normalized
+```
+
+### 8.8. Cache invalidation on API PATCH
+
+**File to modify**: `src/api/routes_pricing.py`
+
+After any PATCH, invalidate cache:
+```python
+from src.engine.pricing_cache import pricing_cache
+
+@router.patch("/prices/{price_id}")
+async def update_price(price_id: str, patch: PricePatch, pool=Depends(get_pool)):
+    result = await postgres.update_price(pool, price_id, **patch.model_dump(exclude_none=True))
+    pricing_cache._loaded_at = 0  # force reload on next access
+    return result
+```
+
+Same for `update_material()`.
+
+Add `price_modifier` to `MaterialPatch` and to postgres `update_material()` allowed fields.
+
+### 8.9. Update `seed_default_prices()` in postgres.py
+
+**File to modify**: `src/db/postgres.py`
+
+Replace `seed_default_prices()` to insert the correct price matrix from section 8.1 above. Use `ON CONFLICT (id) DO NOTHING` so it doesn't overwrite manager's edits. Also update `seed_default_materials()` to include `price_modifier`.
+
+### 8.10. Update Mini App PricingEditor
+
+**File to modify**: `mini-app/src/pages/PricingEditor.tsx` and `mini-app/src/components/PriceTable.tsx`
+
+Group prices by category in the UI:
+- **Базовые ставки** (base) — show as price matrix table (partition type × glass)
+- **Доп. услуги** (addon) — list with inline-edit
+- **Модификаторы** (modifier/discount) — list with inline-edit
+
+Each price row:
+- Display: name, amount, currency
+- Click "✎" → amount becomes `<input type="number">`
+- On blur/enter → `PATCH /api/pricing/prices/{id}` with new amount
+- Show ✓ on success, ✗ on error
+
+Below prices, show **Материалы** section:
+- List materials grouped by kind (glass/frame)
+- Show color swatch (div with background from RGBA array)
+- Show name, price_modifier
+- Editable price_modifier (inline edit)
+
+### 8.11. Tests
+
+**File to create**: `tests/test_pricing_cache.py`
+
+Write these tests:
+1. `test_cache_loads_from_db` — mock pool returning price/material rows, verify cache populated
+2. `test_cache_ttl_expired_reloads` — set `_loaded_at` to past, verify reload called
+3. `test_get_base_rate_matrix` — verify correct rate for (sliding_2, standard), (fixed, textured), etc.
+4. `test_get_base_rate_fallback` — unknown partition type falls back to sliding_2 standard = $150
+5. `test_addon_price` — verify matting_solid=$7, handle=$80
+6. `test_frame_modifier` — verify 4% for non-black
+7. `test_volume_discount` — verify 6% over 8 sqm
+8. `test_calculate_price_fixed_standard` — 3m×2m стационарная прозрачное = 6×130 = $780
+9. `test_calculate_price_sliding2_textured_with_matting` — verify all addons stack correctly
+10. `test_api_invalidates_cache` — PATCH price → `_loaded_at` becomes 0
+
+**File to modify**: existing `tests/test_pricing.py` — update to pass mock cache with old values so existing test doesn't break.
+
+### RULES FOR CODEX
+
+1. **Migration MUST use ON CONFLICT DO UPDATE** for price matrix rows (not DO NOTHING) — to fix wrong values on re-run.
+2. **Default cache values MUST match real price list** — $150/sqm sliding_2 standard.
+3. **`calculate_price()` remains sync** — cache is loaded async before calling.
+4. **Keep `config/app_config.json` and `config_manager.py` unchanged** — render engine can still fall back to them if cache is empty.
+5. **Gray/Bronze glass (types 2, 3) MUST have same price as transparent (type 1)** — only textured (type 4) is different.
+6. **ALL existing tests must still pass.**
+7. **Mini App build must pass**: `cd mini-app && npm run build` — zero errors.
+8. **Do NOT touch** docs/, .env, GEMINI.md, run.sh.
+
+### File Checklist
+
+- [ ] `migrations/012_correct_pricing.sql` — NEW
+- [ ] `src/engine/pricing_cache.py` — NEW
+- [ ] `src/engine/pricing_engine.py` — rewrite calculate_price() with correct formula
+- [ ] `src/models.py` — add partition_type, matting, complex_pattern to RenderPartitionAction
+- [ ] `src/llm/tools_schema.py` — add partition_type and matting to action schema
+- [ ] `src/llm/actions_applier.py` — load cache, pass new fields to calculate_price
+- [ ] `src/engine/render_engine.py` — use pricing_cache for material colors
+- [ ] `src/db/postgres.py` — update seed functions, add price_modifier to allowed update fields
+- [ ] `src/api/routes_pricing.py` — cache invalidation, price_modifier in MaterialPatch
+- [ ] `mini-app/src/pages/PricingEditor.tsx` — editable price matrix + materials
+- [ ] `mini-app/src/components/PriceTable.tsx` — inline edit capability
+- [ ] `tests/test_pricing_cache.py` — NEW, 10 tests
+- [ ] Update `tests/test_pricing.py` — use mock cache for backward compat
+
+### Single commit:
+`"feat: correct pricing from real price list, DB-driven with cache, editable via Mini App"`
 
 -- Set correct glass modifiers
 UPDATE materials SET price_modifier = 1.0 WHERE id = 'glass_1';
@@ -876,12 +1303,8 @@ VALUES
     ('volume_discount_rate', 'Скидка за объём', 'discount', 6.0, '%', '{"threshold_sqm": 8, "description": "% скидка при площади > threshold"}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
--- Update existing seed prices with Russian names
-UPDATE prices SET name = 'Базовая ставка за кв.м' WHERE id = 'base_sqm' AND name = 'Base square meter';
-UPDATE prices SET name = 'Дверная ручка' WHERE id = 'handle' AND name = 'Door handle';
-```
-
-### 8.2. PricingCache — in-memory cache with TTL
+### OLD PHASE 8 SECTIONS BELOW — SUPERSEDED by corrected Phase 8 above. IGNORE EVERYTHING BELOW THIS LINE.
+### ============================== IGNORE BELOW ==============================
 
 **File to create**: `src/engine/pricing_cache.py`
 
