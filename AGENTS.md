@@ -605,9 +605,235 @@ Run: `cd /Users/mosesvasilenko/shermos-bot && .venv/bin/python -m pytest tests/t
 
 ---
 
-## COMMIT ORDER (IMPORTANT)
+---
 
-Phase 4 and Phase 5 are already committed. Phase 6 is a single commit.
+## PHASE 7: Vulnerability Visualization (second tab on architecture site)
+
+**Execute ONLY after Phase 6 is committed, tested, and all tests pass.**
+
+Add a second tab "Уязвимости" to the existing `docs/architecture-viz/` site. This tab visualizes how each of the 5 architectural weak points can cascade through the system and destroy the processing chain.
+
+### Context
+
+The existing site has 15 hops in a flow diagram. The new tab shows 5 vulnerability scenarios — each one traces a "what if X breaks?" path through the same 15 hops, highlighting which hops fail, what the user sees, and how the fix (Phase 6) prevents the cascade.
+
+### Modifications
+
+**Files to modify** (NOT create new files — extend existing ones):
+- `docs/architecture-viz/index.html` — add tab navigation
+- `docs/architecture-viz/style.css` — add styles for vulnerability cards
+- `docs/architecture-viz/app.js` — add vulnerability data and rendering logic
+
+### Tab Navigation
+
+Add a tab bar at the top of the page, below the header:
+
+```html
+<nav class="page-tabs" aria-label="Разделы">
+  <button class="page-tab is-active" data-tab="flow">Поток сообщения</button>
+  <button class="page-tab" data-tab="vulns">Уязвимости</button>
+</nav>
+```
+
+Style: same pill-shaped buttons as Mini App tabs. Active = `var(--accent)` bg, white text. Inactive = transparent, `var(--muted)` text.
+
+When "Уязвимости" tab is active, hide the flow diagram and show the vulnerability section. When "Поток сообщения" is active, show the flow diagram (current behavior).
+
+### Vulnerability Section Layout
+
+A vertical list of 5 expandable vulnerability cards. Each card has:
+
+**Collapsed state:**
+- Left: severity indicator (red circle for critical, orange for serious)
+- Title: vulnerability name in `16px`, `font-weight: 600`
+- Subtitle: one-line impact summary in `13px`, `var(--muted)`
+- Right: expand chevron (▶ / ▼)
+
+**Expanded state (on click):**
+The card expands to show a **failure cascade diagram** — a mini version of the 15-hop flow where affected hops are highlighted red, with annotations explaining what breaks at each step.
+
+### The 5 Vulnerability Scenarios (use this data exactly)
+
+**V1: "Worker crash после BRPOP" — CRITICAL**
+```
+severity: "critical"
+title: "Потеря задачи при crash воркера"
+subtitle: "BRPOP удаляет job из очереди. Crash = job потерян навсегда."
+affected_hops: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+cascade:
+  - hop: 4 (BRPOP)
+    status: "trigger"
+    note: "BRPOP атомарно удаляет job из Redis. Job теперь ТОЛЬКО в памяти воркера."
+  - hop: 5-13
+    status: "dead"
+    note: "Воркер убит (OOM, SIGKILL, segfault). Все шаги 5-13 не выполнятся никогда."
+  - hop: 14
+    status: "orphan"
+    note: "Lock lock:user:{chat_id} остаётся в Redis на 180 секунд. Новые сообщения от пользователя будут блокированы."
+user_sees: "Сообщение отправлено, typing indicator показан, но ответа нет. Через 3 минуты lock истекает, но тот конкретный запрос потерян."
+fix: "Phase 6.1: BLMOVE перемещает job в processing list. При рестарте воркера recover_stuck_jobs() возвращает незавершённые jobs обратно в очередь."
+fix_diagram: "Hop 4 теперь: BLMOVE queue:incoming → queue:processing:client. Job в двух местах. Crash → recovery → retry."
+```
+
+**V2: "Redis disconnect убивает все задачи" — CRITICAL**
+```
+severity: "critical"
+title: "Отказ Redis уничтожает весь worker"
+subtitle: "Один ConnectionError в любом loop — asyncio.gather() падает, все 3 задачи мертвы."
+affected_hops: [3, 4, 5, 14, 15]
+cascade:
+  - hop: 3 (Enqueue)
+    status: "blocked"
+    note: "Webhook не может поставить job в очередь. Update записан в PG, но никогда не обработан."
+  - hop: 4 (BRPOP)
+    status: "trigger"
+    note: "redis.ConnectionError в BRPOP. _client_loop() не имеет try/except."
+  - hop: 5 (Lock)
+    status: "dead"
+    note: "Acquire/release lock тоже обращаются к Redis — cascading failure."
+  - hop: 14 (Lock release)
+    status: "orphan"
+    note: "Если lock был захвачен до disconnect — DEL не выполнится. TTL 180s — единственная защита."
+  - hop: 15 (Outbox)
+    status: "dead"
+    note: "Outbox dispatcher — третья задача в asyncio.gather(). Если gather() упал — outbox тоже мёртв. Pending сообщения не доставляются."
+user_sees: "Бот полностью мёртв. Ни один пользователь не получает ответы. Systemd перезапустит процесс, но до перезапуска — тишина."
+fix: "Phase 6.2: try/except + asyncio.sleep(5) backoff в каждом loop. Один loop может упасть и восстановиться не убивая остальные."
+fix_diagram: "Каждый loop изолирован. Redis reconnect через 5 секунд. Другие задачи продолжают работать."
+```
+
+**V3: "3D рендер зависает навечно" — SERIOUS**
+```
+severity: "serious"
+title: "Зависший рендер блокирует thread pool"
+subtitle: "run_in_executor без timeout. Зависший trimesh = worker вечно ждёт."
+affected_hops: [11]
+cascade:
+  - hop: 11 (Apply Actions → render_partition)
+    status: "trigger"
+    note: "loop.run_in_executor(None, _sync_render, ...) запускает рендер в thread. Python threads НЕ ПОДДЕРЖИВАЮТ cancel/timeout."
+  - side_effect: "user_lock"
+    note: "Lock TTL=180s истекает через 3 минуты. Но thread продолжает работать. Новые сообщения от этого пользователя начнут обрабатываться ПАРАЛЛЕЛЬНО с зависшим рендером."
+  - side_effect: "thread_pool"
+    note: "Зависший thread занимает слот в default ThreadPoolExecutor (обычно min(32, cpu+4)). Многократные зависания = thread pool exhaustion."
+user_sees: "Бот сказал 'Рендерю...' и замолчал. Через 3 минуты можно написать снова, но результата от предыдущего запроса не будет."
+fix: "Phase 6.3: Рендер в subprocess (как Gemini CLI). Hard timeout 120s → SIGKILL. Subprocess изолирован от event loop."
+fix_diagram: "Hop 11: asyncio.create_subprocess_exec(python -c 'render script'). TimeoutError → SIGKILL → clean error to user."
+```
+
+**V4: "OAuth Gemini истёк — все LLM-вызовы падают" — SERIOUS**
+```
+severity: "serious"
+title: "Тихий отказ Gemini CLI"
+subtitle: "OAuth token истёк. Все вызовы LLM возвращают ошибку. Нет мониторинга."
+affected_hops: [9, 10, 11, 12]
+cascade:
+  - hop: 9 (Gemini CLI)
+    status: "trigger"
+    note: "gemini CLI запускается, читает ~/.gemini/ credentials, получает 401 от Google API. returncode != 0."
+  - hop: 10 (Parse)
+    status: "garbage"
+    note: "Вместо JSON — сообщение об ошибке авторизации. Парсер возвращает FALLBACK: 'Ошибка, попробуйте снова.'"
+  - hop: 11 (Actions)
+    status: "skip"
+    note: "actions=None из FALLBACK. Никаких действий: ни рендера, ни записи на замер, ни обновления state."
+  - hop: 12 (Reply)
+    status: "degraded"
+    note: "Пользователь получает 'Ошибка, попробуйте снова.' на КАЖДОЕ сообщение."
+user_sees: "Бот отвечает 'Ошибка' на всё. Менеджеры не знают что сломалось. Проблема обнаруживается только когда клиенты жалуются."
+fix: "Phase 6.4: Health check каждые 10 минут. Тестовый prompt. Если fails → CRITICAL log. /health endpoint показывает gemini_healthy: false."
+fix_diagram: "Новая задача в worker: run_gemini_health_check(). Мониторинг + алерт до того, как пользователи пострадают."
+```
+
+**V5: "Outbox дублирует сообщения" — SERIOUS**
+```
+severity: "serious"
+title: "Пользователь получает ответ дважды"
+subtitle: "send_message OK → mark_sent FAIL → outbox re-sends."
+affected_hops: [12, 15]
+cascade:
+  - hop: 12 (Send Reply)
+    status: "trigger"
+    note: "INSERT outbound_event(pending) → send_message() SUCCEEDS → mark_outbound_sent() FAILS (PG timeout, worker killed). Event остаётся 'pending'."
+  - hop: 15 (Outbox Dispatcher)
+    status: "duplicate"
+    note: "Через 15 секунд dispatcher видит 'pending' event. Не знает что оно уже отправлено. Отправляет повторно."
+user_sees: "Два одинаковых сообщения от бота подряд. При рендере — два набора фотографий. Выглядит как баг."
+fix: "Phase 6.5: Сохранять telegram_message_id после успешной отправки. Outbox dispatcher проверяет: если message_id уже есть — просто mark_sent, не отправляя заново."
+fix_diagram: "Hop 12: send_message() возвращает message_id → сохраняется в outbound_events. Hop 15: if telegram_message_id exists → skip send."
+```
+
+### Visual Design for Vulnerability Cards
+
+**Collapsed card:**
+```css
+.vuln-card {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.vuln-card:hover { border-color: var(--border-soft); box-shadow: var(--shadow-md, 0 2px 8px rgba(0,0,0,0.15)); }
+.vuln-card.is-expanded { border-color: var(--accent); }
+```
+
+**Severity indicators:**
+- Critical: `background: var(--danger); width: 10px; height: 10px; border-radius: 50%;` + pulsing animation
+- Serious: `background: var(--warning); width: 10px; height: 10px; border-radius: 50%;`
+
+**Expanded content — cascade diagram:**
+A vertical timeline of affected hops. Each hop shows:
+- Hop number + name
+- Status badge: "trigger" (red), "dead" (dark gray, strikethrough), "degraded" (orange), "orphan" (purple), "duplicate" (yellow), "garbage" (orange), "skip" (gray), "blocked" (red)
+- Note explaining what breaks
+- Connected by vertical line (solid for direct cascade, dashed for side effects)
+
+**"Что видит пользователь" block:**
+- Red-tinted card (`background: var(--danger-bg)`) with chat bubble mockup showing the error message
+
+**"Как исправлено" block:**
+- Green-tinted card (`background: var(--ok-bg)`) with brief description + reference to Phase 6.X
+
+**Before/After mini-diagrams:**
+Show simplified 3-4 hop flows:
+- "До": hops in red with X marks
+- "После": hops in green with checkmarks
+Use flexbox row with arrow separators.
+
+### Animations
+
+1. **Card expand**: `max-height: 0 → max-height: 1200px` with `transition: max-height 500ms ease`. Content fades in with `opacity: 0 → 1, transition: 300ms ease 200ms`.
+2. **Severity pulse** (critical only): `@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4) } 70% { box-shadow: 0 0 0 8px rgba(239,68,68,0) } }` — 2s infinite.
+3. **Cascade timeline reveal**: When card expands, each hop in the timeline appears with staggered delay (`transition-delay: calc(var(--i) * 80ms)`).
+4. **Tab switch**: Content cross-fades with `opacity` transition (200ms).
+
+### Interaction
+
+- Click card to expand/collapse (accordion — only one open at a time)
+- Click a hop name in the cascade to jump to that hop in the "Поток сообщения" tab
+- Keyboard: Tab to navigate cards, Enter/Space to expand
+
+### Technical Rules
+
+1. **NO new files** — modify only the existing 3 files in `docs/architecture-viz/`.
+2. **Keep all existing flow diagram functionality working** — tab switch must preserve state.
+3. **All vulnerability data in `app.js`** as a JavaScript array (like `hops`).
+4. **CSS animations only** where possible.
+5. **Responsive**: cards are full-width, cascade timeline adapts to mobile.
+6. **Single commit**: `"feat: add vulnerability cascade visualization tab to architecture site"`
+
+---
+
+## COMMIT ORDER (FINAL)
+
+1. ✅ Phase 4: Mini App UI redesign (committed)
+2. ✅ Phase 5: Architecture visualization site (committed)
+3. Phase 6: Reliability hardening (Python backend fixes + tests)
+4. Phase 7: Vulnerability visualization tab (docs/architecture-viz/ extension)
+
+**Phase 7 MUST be committed AFTER Phase 6. Do not mix them.**
 
 ---
 
