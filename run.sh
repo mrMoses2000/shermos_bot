@@ -422,34 +422,31 @@ fi
 step "Step 10b: Ngrok tunnel for Mini App"
 
 # Check if ngrok tunnel for port 9443 already exists
+# Check if ngrok agent is running and if shermos-api tunnel exists
 EXISTING_TUNNEL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
     | python3 -c "import sys,json; tunnels=json.load(sys.stdin).get('tunnels',[]); [print(t['public_url']) for t in tunnels if ':9443' in t.get('config',{}).get('addr','')]" 2>/dev/null)
 
 if [ -n "$EXISTING_TUNNEL" ]; then
     log "Ngrok tunnel already exists: $EXISTING_TUNNEL"
     NGROK_URL="$EXISTING_TUNNEL"
-else
-    # Add shermos tunnel to ngrok config and restart with both tunnels
-    NGROK_CONFIG="$HOME/.config/ngrok/ngrok.yml"
+elif curl -s http://localhost:4040/api/tunnels &>/dev/null; then
+    # Ngrok agent is running — add tunnel via API
+    RESULT=$(curl -s -H "Content-Type: application/json" -X POST \
+        http://localhost:4040/api/tunnels \
+        -d '{"addr":"9443","proto":"http","name":"shermos-api"}' 2>/dev/null)
+    NGROK_URL=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('public_url',''))" 2>/dev/null)
 
-    # Add tunnel config if not present
-    if ! grep -q "shermos-api" "$NGROK_CONFIG" 2>/dev/null; then
-        cat >> "$NGROK_CONFIG" << 'NGCFG'
-tunnels:
-  shermos-api:
-    addr: 9443
-    proto: http
-NGCFG
-        log "Added shermos-api tunnel to ngrok config"
+    if [ -n "$NGROK_URL" ]; then
+        log "Ngrok tunnel created: $NGROK_URL"
+    else
+        warn "Could not add ngrok tunnel via API"
     fi
-
-    # Start ngrok tunnel in background
-    nohup ngrok start shermos-api --log=/tmp/ngrok-shermos.log >/dev/null 2>&1 &
+else
+    # No ngrok agent — start one
+    nohup ngrok http 9443 --log=/tmp/ngrok-shermos.log >/dev/null 2>&1 &
     sleep 3
-
     NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
         | python3 -c "import sys,json; tunnels=json.load(sys.stdin).get('tunnels',[]); [print(t['public_url']) for t in tunnels if ':9443' in t.get('config',{}).get('addr','')]" 2>/dev/null)
-
     if [ -n "$NGROK_URL" ]; then
         log "Ngrok tunnel created: $NGROK_URL"
     else
