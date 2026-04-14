@@ -6,12 +6,250 @@
 
 ## ⚡ CURRENT STATUS (2026-04-14 — READ FIRST)
 
-Phases 0-3 COMPLETE. Backend deployed, all services running.
-79 tests, 91.77% coverage. Backend is DONE — **do NOT touch backend files**.
+Phases 0-4 COMPLETE. Backend deployed, all services running. Mini App UI redesigned.
+79 tests, 91.77% coverage. Backend is DONE — **do NOT touch backend Python files**.
 
 ### What REMAINS — your task now:
 
-**PHASE 4: Complete Mini App UI Redesign**
+**PHASE 5: Architecture Visualization Site (SEPARATE COMMIT)**
+
+Create a standalone interactive animated website that explains how a Telegram message travels through the Shermos system. This site lives in `docs/architecture-viz/` and is built with vanilla HTML + CSS + JS (no frameworks).
+
+---
+
+## PHASE 5 INSTRUCTIONS (READ EVERY LINE)
+
+### Purpose
+
+Build a single-page animated architecture visualization site that explains the full message flow through the Shermos bot system. The audience is a Linux systems engineer — show networking, IPC, queue mechanics, subprocess lifecycle, and DB transactions.
+
+### Directory
+
+`docs/architecture-viz/` — create this directory. Files:
+- `index.html` — the page
+- `style.css` — all styles
+- `app.js` — all animation/interaction logic
+
+### Design References
+
+Take inspiration from the design tokens used in the Mini App (see `mini-app/src/styles/index.css`). The overall aesthetic should be:
+- **Dark mode primary** (bg: #0a0a0a, text: #e5e7eb, accent: #3b82f6 blue for active flow lines)
+- Clean, monospace font for technical content (`"SF Mono", "JetBrains Mono", "Fira Code", Consolas, monospace`)
+- Apple-style minimal layout with generous whitespace
+- Subtle animations (no flashy effects)
+
+### Page Structure
+
+The page has one main section: an interactive **flow diagram** showing the 15 hops of a message. The user can click/scroll through each hop to see it animate.
+
+**Header:**
+- Title: "Shermos Architecture" in `32px`, `font-weight: 700`
+- Subtitle: "Путь сообщения от клиента до ответа" in `16px`, `color: #6b7280`
+
+**Flow Diagram (central area):**
+A horizontal or vertical pipeline of 15 nodes connected by animated lines. Each node represents a hop:
+
+```
+1. Telegram POST      →  2. Dedup (PG)         →  3. Enqueue (Redis)
+4. BRPOP (Worker)     →  5. User Lock (Redis)   →  6. Load State (PG)
+7. Load Slots (PG)    →  8. Build Prompt        →  9. Gemini CLI (subprocess)
+10. Parse Response     → 11. Apply Actions       → 12. Send Reply (TG API)
+13. Save History (PG) → 14. Release Lock        → 15. Outbox Dispatcher
+```
+
+**Each node is a card:**
+- Width: `200px` (desktop) / full-width (mobile)
+- Background: `#141414`
+- Border: `1px solid #2a2a2a`
+- Border-radius: `12px`
+- Padding: `16px`
+- Contains:
+  - Small icon/emoji at top (e.g., "📨" for webhook, "🔐" for lock, "🤖" for Gemini)
+  - Hop name in `14px`, `font-weight: 600`, `color: #f9fafb`
+  - Short description in `12px`, `color: #6b7280`
+
+**Connecting lines:**
+- SVG paths or CSS borders between nodes
+- When a hop is "active" (user clicked or scrolled to it), the line animates with a moving dot/pulse from the previous node to the current one
+- Active line color: `#3b82f6` (blue)
+- Inactive lines: `#2a2a2a`
+
+**Detail Panel (right side on desktop, below on mobile):**
+When a hop is selected, show a detail panel with:
+
+- **Title**: Hop name + file reference (e.g., "HOP 9: Gemini CLI — `src/llm/executor.py`")
+- **Input/Output** section: what data enters and leaves this hop
+- **Network** section (if applicable): protocol, port, TCP/TLS details
+- **Code snippet**: a representative 5-15 line code fragment (styled with syntax highlighting via CSS — color keywords/strings/comments differently)
+- **State changes**: what DB tables or Redis keys are modified
+- **Risk indicators**: orange badge for timeout risks, red for crash risks
+- **Timing**: approximate latency (e.g., "< 1ms" for Redis, "5-90s" for Gemini)
+
+### Hop Details (use this data for each hop's detail panel)
+
+**Hop 1: Telegram POST**
+- Input: HTTPS POST from Telegram servers → `0.0.0.0:88`
+- Network: TLS (self-signed cert), TCP port 88
+- Code: `webhook.py:50-85` — `_process_webhook()`, secret token validation, JSON parse
+- Output: Parsed `(chat_id, user_id, text, msg_type, callback_data)`
+- Risk: None — errors are swallowed, always returns 200
+
+**Hop 2: Deduplication (PostgreSQL)**
+- Input: `update_id` (int)
+- Network: TCP localhost:5432 (asyncpg binary protocol)
+- Code: `postgres.py:62-72` — `INSERT INTO processed_updates ... ON CONFLICT DO NOTHING`
+- Output: `is_new: bool`
+- State: New row in `processed_updates` table
+- Risk: If PG down, update is lost
+
+**Hop 3: Enqueue (Redis LPUSH)**
+- Input: `Job` Pydantic model serialized to JSON
+- Network: TCP localhost:6379 (RESP protocol)
+- Code: `redis_client.py:32-34` — `LPUSH queue:incoming <json>`
+- Output: Job in Redis list
+- Timing: < 1ms
+
+**Hop 4: Worker Dequeue (Redis BRPOP)**
+- Input: Nothing (blocking read)
+- Network: TCP localhost:6379, persistent connection
+- Code: `redis_client.py:36-43` — `BRPOP queue:incoming 5`
+- Output: `Job` model or `None` (5s timeout)
+- Risk: **BRPOP is destructive** — job removed from queue on read. If worker crashes after this, job is LOST.
+- Timing: 0-5s (blocking wait)
+
+**Hop 5: User Lock (Redis SET NX)**
+- Input: `chat_id`
+- Code: `redis_client.py:45-47` — `SET lock:user:{chat_id} 1 NX EX 180`
+- Output: `bool` (acquired or not)
+- State: Redis key with 180s TTL
+- Risk: Lock TTL (180s) can expire during long processing. Exponential backoff on contention (1s, 2s, 4s... max 30s). After 5 failed attempts, job is silently dropped.
+
+**Hop 6: Load State (PostgreSQL)**
+- Input: `chat_id`
+- Queries: `get_client_by_chat_id()`, `get_conversation_state()`, `get_chat_messages(limit=20)`
+- Code: `worker.py:181-186`, `postgres.py` multiple functions
+- Output: `client` dict, `state` dict (mode/step/collected_params), `history` list
+- Network: 3-4 sequential PG queries
+
+**Hop 7: Load Slots (PostgreSQL)**
+- Input: current date, 3-day range
+- Code: `measurement_service.py:83-129` — `get_available_slots()`
+- SQL: `SELECT scheduled_time FROM measurements WHERE status IN ('scheduled','confirmed')`
+- Output: `dict[str, list[str]]` — e.g., `{"2026-04-14": ["10:00","10:30",...]}`
+- Network: 3 sequential PG queries (one per day)
+
+**Hop 8: Build Prompt**
+- Input: user text, client, state, history, slots
+- Code: `prompt_builder.py:86-185` — `build_prompt()`
+- Pure function (no I/O). Assembles system role, materials, tools schema, FSM state, missing params, slots, history, user message.
+- Output: string ~2000-5000 chars
+- Timing: < 1ms
+
+**Hop 9: Gemini CLI (subprocess)**
+- Input: prompt string via stdin pipe
+- Code: `executor.py:81-135` — `asyncio.create_subprocess_exec("gemini", ...)`
+- IPC: fork() → exec("gemini"), stdin=PIPE, stdout=PIPE, stderr=PIPE, `start_new_session=True` (new process group)
+- Semaphore: max 2 concurrent calls
+- Network (inside child): HTTPS to `generativelanguage.googleapis.com` (Google API), OAuth from `~/.gemini/`
+- Timeout: 90s hard limit → `SIGTERM` to process group → wait 5s → `SIGKILL` if still alive
+- Output: cleaned stdout string (JSON expected)
+- Risk: OAuth token expiry = all calls fail. No monitoring.
+- Timing: 5-90s
+
+**Hop 10: Parse Response**
+- Input: raw LLM output string
+- Code: `actions_parser.py:90-99` — tries JSON parse, then markdown fence extraction, then brace-matching
+- Output: `ActionsJson(reply_text="...", actions={...})` or FALLBACK
+- Never raises — always returns a value
+- Timing: < 1ms
+
+**Hop 11: Apply Actions**
+- Input: `ActionsJson`, chat_id, state, pg_pool
+- Code: `actions_applier.py:24-143`
+- Sub-actions:
+  - `state_patch` → UPSERT `conversation_state`
+  - `render_partition` → 3D render in **thread executor** (trimesh+pyrender), price calculation, INSERT order, notify managers
+  - `schedule_measurement` → validate time, check conflicts (SQL), INSERT measurement, notify managers with inline keyboard
+  - `update_client_profile` → UPDATE clients
+- Risk: 3D render has **no timeout** — hangs forever if renderer crashes
+- Timing: 1-30s (mostly render)
+
+**Hop 12: Send Reply (Telegram API)**
+- Input: reply text, optional render images
+- Code: `worker.py:196-203`, `telegram_sender.py:47-63`
+- Network: HTTPS POST to `api.telegram.org:443`
+- Steps: INSERT outbound_event (pending) → POST sendMessage → UPDATE outbound_event (sent)
+- Risk: If send succeeds but DB update fails → outbox dispatcher re-sends → **duplicate message**
+- Timing: 100-500ms
+
+**Hop 13: Save History (PostgreSQL)**
+- Input: user text, assistant reply
+- Code: `postgres.py:194-200` — `INSERT INTO chat_messages`
+- State: 2 new rows in `chat_messages`, update `processed_updates` to 'completed'
+
+**Hop 14: Release Lock**
+- Code: `redis_client.py:49-50` — `DEL lock:user:{chat_id}`
+- Runs in `finally` block — always executes
+
+**Hop 15: Outbox Dispatcher**
+- Code: `outbox_dispatcher.py:15-43` — separate async task, polls every 15s
+- Queries pending outbound events (attempts < 5)
+- Retries failed sends, marks as 'failed' after 5 attempts
+- Purpose: at-least-once delivery guarantee
+
+### Animations
+
+1. **Flow pulse**: When hop N is active, an animated dot travels along the line from hop N-1 to hop N. Use CSS `@keyframes` with `offset-path` or SVG `<animate>`.
+
+2. **Node highlight**: Active node gets `border-color: #3b82f6`, `box-shadow: 0 0 20px rgba(59,130,246,0.15)`. Transition: `300ms ease`.
+
+3. **Detail panel slide-in**: Panel slides in from right (desktop) or expands below (mobile) with `transform: translateX(100%) → translateX(0)`, `transition: 400ms ease`.
+
+4. **Auto-play mode**: A "Play" button at the top auto-advances through all 15 hops at 3-second intervals with smooth transitions. A progress bar at the top shows overall progress.
+
+5. **Code syntax highlighting** (CSS-only): color keywords `async`, `await`, `def`, `import`, `if`, `for`, `return` in `#c084fc` (purple). Strings in `#86efac` (green). Comments in `#6b7280`. Numbers in `#fbbf24` (amber).
+
+### Interaction
+
+- **Desktop**: Hops are laid out in a 5×3 grid or a flowing path. Click a node to select it. Detail panel on the right (40% width).
+- **Mobile (< 768px)**: Hops are vertical list. Tap a node to expand its detail section inline below it (accordion style).
+- **Keyboard**: Arrow keys navigate between hops. Space bar starts/stops auto-play.
+- **Scroll indicator**: At page bottom, text: "Создано для Shermos 3D Partition Visualizer" in `12px`, `color: #4b5563`.
+
+### Technical Rules
+
+1. **NO npm dependencies** — pure HTML + CSS + JS. No build step.
+2. **All in 3 files**: `index.html`, `style.css`, `app.js`.
+3. **CSS animations only** where possible (use JS only for interaction logic and state).
+4. **Responsive**: works on 375px-1920px.
+5. **No external fonts** — use system fonts + monospace stack.
+6. **Self-contained**: can be opened directly with `file:///` or served by any static server.
+7. **MUST be a SEPARATE git commit** from Phase 4 changes.
+
+### File Checklist
+
+- [ ] `docs/architecture-viz/index.html`
+- [ ] `docs/architecture-viz/style.css`
+- [ ] `docs/architecture-viz/app.js`
+
+### Verification
+
+Open `docs/architecture-viz/index.html` in a browser. All 15 hops must be visible, clickable, and show detail panels. Auto-play must work. No console errors.
+
+---
+
+## COMMIT ORDER (IMPORTANT)
+
+1. **First commit**: Phase 4 changes only (mini-app/ files). Message: `"feat: redesign Mini App UI with premium design system"`
+2. **Second commit**: Phase 5 (docs/architecture-viz/). Message: `"feat: add interactive architecture visualization site"`
+
+DO NOT mix Phase 4 and Phase 5 in the same commit.
+
+---
+
+### What's DONE (do not touch):
+
+**Backend (ALL COMPLETE — DO NOT MODIFY):**
 
 The current Mini App looks like a prototype. It needs a premium redesign inspired by Apple, Figma, and Raycast design systems. The app is a manager CMS (dashboard, orders, clients, measurements) opened inside Telegram WebView.
 
