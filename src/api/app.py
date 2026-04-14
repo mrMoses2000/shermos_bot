@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Shermos Mini App API", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(NgrokSkipWarningMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

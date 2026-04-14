@@ -417,53 +417,63 @@ else
 fi
 
 # ============================================================
-# STEP 10b: Ngrok tunnel for Mini App
+# STEP 10b: Cloudflare Tunnel for Mini App
 # ============================================================
-step "Step 10b: Ngrok tunnel for Mini App"
+step "Step 10b: Cloudflare Tunnel for Mini App"
 
-# Check if ngrok tunnel for port 9443 already exists
-# Check if ngrok agent is running and if shermos-api tunnel exists
-EXISTING_TUNNEL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
-    | python3 -c "import sys,json; tunnels=json.load(sys.stdin).get('tunnels',[]); [print(t['public_url']) for t in tunnels if ':9443' in t.get('config',{}).get('addr','')]" 2>/dev/null)
-
-if [ -n "$EXISTING_TUNNEL" ]; then
-    log "Ngrok tunnel already exists: $EXISTING_TUNNEL"
-    NGROK_URL="$EXISTING_TUNNEL"
-elif curl -s http://localhost:4040/api/tunnels &>/dev/null; then
-    # Ngrok agent is running — add tunnel via API
-    RESULT=$(curl -s -H "Content-Type: application/json" -X POST \
-        http://localhost:4040/api/tunnels \
-        -d '{"addr":"9443","proto":"http","name":"shermos-api"}' 2>/dev/null)
-    NGROK_URL=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('public_url',''))" 2>/dev/null)
-
-    if [ -n "$NGROK_URL" ]; then
-        log "Ngrok tunnel created: $NGROK_URL"
-    else
-        warn "Could not add ngrok tunnel via API"
-    fi
-else
-    # No ngrok agent — start one
-    nohup ngrok http 9443 --log=/tmp/ngrok-shermos.log >/dev/null 2>&1 &
-    sleep 3
-    NGROK_URL=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null \
-        | python3 -c "import sys,json; tunnels=json.load(sys.stdin).get('tunnels',[]); [print(t['public_url']) for t in tunnels if ':9443' in t.get('config',{}).get('addr','')]" 2>/dev/null)
-    if [ -n "$NGROK_URL" ]; then
-        log "Ngrok tunnel created: $NGROK_URL"
-    else
-        warn "Could not start ngrok tunnel. Start manually: ngrok http 9443"
-    fi
+# Install cloudflared if missing
+if ! command -v cloudflared &>/dev/null; then
+    warn "Installing cloudflared..."
+    curl -sL -o /tmp/cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+    sudo dpkg -i /tmp/cloudflared.deb >/dev/null 2>&1
+    log "cloudflared installed"
 fi
 
-# Update MINI_APP_URL in .env if ngrok URL changed
-if [ -n "$NGROK_URL" ]; then
+# Create systemd service for cloudflared tunnel
+sudo tee /etc/systemd/system/shermos-tunnel.service >/dev/null << EOF
+[Unit]
+Description=Cloudflare Tunnel for Shermos Mini App
+After=network.target shermos-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:9443 --no-autoupdate
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable shermos-tunnel >/dev/null 2>&1
+
+if sudo systemctl is-active --quiet shermos-tunnel; then
+    log "Cloudflare tunnel already running"
+else
+    sudo systemctl start shermos-tunnel
+    sleep 5
+    log "Cloudflare tunnel started"
+fi
+
+# Extract tunnel URL from logs
+TUNNEL_URL=$(sudo journalctl -u shermos-tunnel -n 50 --no-pager 2>/dev/null \
+    | grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)
+
+if [ -n "$TUNNEL_URL" ]; then
+    log "Cloudflare tunnel: $TUNNEL_URL"
     CURRENT_MINI_URL=$(env_val "MINI_APP_URL")
-    if [ "$CURRENT_MINI_URL" != "$NGROK_URL" ]; then
-        sed -i "s|^MINI_APP_URL=.*|MINI_APP_URL=$NGROK_URL|" .env
-        log "Updated MINI_APP_URL in .env to $NGROK_URL"
-        # Restart worker so it picks up new URL for /start keyboard
+    if [ "$CURRENT_MINI_URL" != "$TUNNEL_URL" ]; then
+        sed -i "s|^MINI_APP_URL=.*|MINI_APP_URL=$TUNNEL_URL|" .env
+        log "Updated MINI_APP_URL in .env to $TUNNEL_URL"
         sudo systemctl restart shermos-worker
         log "Restarted worker with new MINI_APP_URL"
     fi
+else
+    warn "Could not detect tunnel URL. Check: sudo journalctl -u shermos-tunnel -n 20"
 fi
 
 # Verify webhook info from Telegram
@@ -488,8 +498,8 @@ echo -e "${GREEN}  Shermos Bot deployed successfully!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
 echo "  Send /start to your bot in Telegram to test."
-if [ -n "$NGROK_URL" ]; then
-echo "  Mini App: $NGROK_URL"
+if [ -n "$TUNNEL_URL" ]; then
+echo "  Mini App: $TUNNEL_URL"
 fi
 echo ""
 echo "  Useful commands:"
