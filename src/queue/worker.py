@@ -139,12 +139,56 @@ async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_
         return
     order = action_result.get("order") or {}
     price = action_result.get("price") or {}
+    details = price.get("details") or {}
     paths = [render_paths[key] for key in sorted(render_paths.keys())]
-    caption = (
-        f"<b>Рендер готов</b>\n"
-        f"Заказ: <code>{order.get('request_id', '')}</code>\n"
-        f"Стоимость: <b>{price.get('total_price')} {price.get('currency')}</b>"
-    )
+
+    pt_names = {
+        "fixed": "Стационарная",
+        "sliding_2": "Раздвижная 2 створки",
+        "sliding_3": "Раздвижная 3 створки",
+        "sliding_4": "Раздвижная 4 створки",
+    }
+    pt = details.get("partition_type", "sliding_2")
+
+    lines = ["<b>Рендер готов</b>"]
+    lines.append(f"Заказ: <code>{order.get('request_id', '')}</code>")
+    lines.append("")
+    lines.append(f"Тип: {pt_names.get(pt, pt)}")
+    lines.append(f"Площадь: {details.get('area_sq_m', '—')} м²")
+    lines.append(f"Базовая ставка: {details.get('base_rate_per_sqm', '—')} $/м²")
+    lines.append(f"Базовая стоимость: {details.get('base_price', '—')} $")
+
+    matting_price = details.get("matting_price", 0)
+    if matting_price:
+        matting_names = {
+            "matting_solid": "Сплошная матировка",
+            "matting_stripes": "Матовые полосы",
+            "matting_logo": "Матовый рисунок",
+        }
+        mat_name = matting_names.get(details.get("matting", ""), "Матировка")
+        lines.append(f"{mat_name}: +{matting_price} $")
+
+    pattern_price = details.get("complex_pattern_price", 0)
+    if pattern_price:
+        lines.append(f"Сложный рисунок: +{pattern_price} $")
+
+    frame_surcharge = details.get("frame_surcharge", 0)
+    if frame_surcharge:
+        lines.append(f"Наценка за цвет рамки: +{frame_surcharge} $")
+
+    handle_price = details.get("handle_price", 0)
+    if handle_price:
+        lines.append(f"Дверная ручка: +{handle_price} $")
+
+    discount = details.get("volume_discount", 0)
+    if discount:
+        lines.append(f"Скидка за объём (>8 м²): -{discount} $")
+
+    lines.append("")
+    lines.append(f"<b>Итого: {price.get('total_price')} {price.get('currency', 'USD')}</b>")
+
+    caption = "\n".join(lines)
+
     if len(paths) == 1:
         await sender.send_photo(settings.telegram_bot_token, job.chat_id, paths[0], caption=caption)
     else:

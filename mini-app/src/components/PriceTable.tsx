@@ -34,18 +34,18 @@ const PARTITION_TYPES = [
   { id: "fixed", label: "Стационарная" },
   { id: "sliding_2", label: "Раздвижная 2 створки" },
   { id: "sliding_3", label: "Раздвижная 3 створки" },
-  { id: "sliding_4", label: "Раздвижная 4 створки" }
+  { id: "sliding_4", label: "Раздвижная 4 створки" },
 ];
 
 const GLASS_CATEGORIES = [
-  { id: "standard", label: "Прозрачное / серое / бронза" },
-  { id: "textured", label: "Рифлёное" }
+  { id: "standard", label: "Станд. стекло" },
+  { id: "textured", label: "Рифлёное" },
 ];
 
 function statusMark(status: SaveStatus) {
-  if (status === "saving") return "…";
-  if (status === "saved") return "✓";
-  if (status === "error") return "✗";
+  if (status === "saving") return "\u2026";
+  if (status === "saved") return "\u2713";
+  if (status === "error") return "\u2717";
   return "";
 }
 
@@ -55,15 +55,25 @@ function toRgba(color?: number[] | null) {
   return `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`;
 }
 
+function unitLabel(price: Price): string {
+  const meta = price.metadata || {};
+  if (price.currency === "%") return "%";
+  if (meta.unit === "piece") return "$/шт";
+  if (meta.unit === "sqm") return "$/м\u00B2";
+  return price.currency;
+}
+
 function EditableNumber({
   label,
   onSave,
   status,
-  value
+  suffix,
+  value,
 }: {
   label: string;
   onSave: (value: number) => Promise<void>;
   status: SaveStatus;
+  suffix?: string;
   value: number;
 }) {
   const [editing, setEditing] = useState(false);
@@ -108,8 +118,11 @@ function EditableNumber({
 
   return (
     <button className="inline-edit-button mono" onClick={() => setEditing(true)} type="button">
-      <span>{value}</span>
-      <span className="edit-pencil">✎</span>
+      <span>
+        {value}
+        {suffix ? <span className="text-muted"> {suffix}</span> : null}
+      </span>
+      <span className="edit-pencil">{"\u270E"}</span>
       <span className={`save-status save-status-${status}`}>{statusMark(status)}</span>
     </button>
   );
@@ -125,7 +138,7 @@ export default function PriceTable({ initData, materials, onMaterialSaved, onPri
         const meta = price.metadata || {};
         return price.category === "base" && meta.partition_type && meta.glass_category;
       }),
-    [prices]
+    [prices],
   );
   const addons = prices.filter((price) => price.category === "addon");
   const modifiers = prices.filter((price) => price.category === "modifier" || price.category === "discount");
@@ -135,7 +148,7 @@ export default function PriceTable({ initData, materials, onMaterialSaved, onPri
   const findBasePrice = (partitionType: string, glassCategory: string) =>
     basePrices.find(
       (price) =>
-        price.metadata?.partition_type === partitionType && price.metadata?.glass_category === glassCategory
+        price.metadata?.partition_type === partitionType && price.metadata?.glass_category === glassCategory,
     );
 
   const savePrice = async (price: Price, amount: number) => {
@@ -153,7 +166,7 @@ export default function PriceTable({ initData, materials, onMaterialSaved, onPri
     setMaterialStatus((current) => ({ ...current, [material.id]: "saving" }));
     try {
       const saved = await apiPatch<Material>(`/api/pricing/materials/${material.id}`, initData, {
-        price_modifier: priceModifier
+        price_modifier: priceModifier,
       });
       onMaterialSaved(saved);
       setMaterialStatus((current) => ({ ...current, [material.id]: "saved" }));
@@ -162,76 +175,44 @@ export default function PriceTable({ initData, materials, onMaterialSaved, onPri
     }
   };
 
-  const renderPriceRows = (items: Price[]) =>
-    items.map((price) => (
-      <tr key={price.id}>
-        <td>{price.name}</td>
-        <td className="text-muted">{price.currency}</td>
-        <td className="mono text-right">
-          <EditableNumber
-            label={`Цена ${price.name}`}
-            onSave={(amount) => savePrice(price, amount)}
-            status={priceStatus[price.id] || "idle"}
-            value={price.amount}
-          />
-        </td>
-      </tr>
-    ));
-
-  const renderMaterials = (items: Material[]) =>
-    items.map((material) => (
-      <tr key={material.id}>
-        <td>
-          <span className="material-name-cell">
-            <span className="material-swatch" style={{ background: toRgba(material.color) }} />
-            <span>{material.name}</span>
-          </span>
-        </td>
-        <td className="text-muted">{material.id}</td>
-        <td className="mono text-right">
-          <EditableNumber
-            label={`Модификатор ${material.name}`}
-            onSave={(priceModifier) => saveMaterialModifier(material, priceModifier)}
-            status={materialStatus[material.id] || "idle"}
-            value={material.price_modifier ?? 1}
-          />
-        </td>
-      </tr>
-    ));
-
   return (
     <div className="pricing-stack">
+      {/* ---- 1. Base rate matrix ---- */}
       <section className="pricing-section">
-        <h3 className="pricing-section-title">Базовые ставки</h3>
+        <h3 className="pricing-section-title">Базовые ставки ($/м\u00B2)</h3>
+        <p className="pricing-section-hint">
+          Прозрачное / серое / бронза = стандартное стекло. Рифлёное = текстурированное.
+        </p>
         <div className="table-card">
           <table className="data-table price-matrix-table">
             <thead>
               <tr>
-                <th className="table-header">Тип</th>
-                {GLASS_CATEGORIES.map((category) => (
-                  <th className="table-header text-right" key={category.id}>
-                    {category.label}
+                <th className="table-header">Тип перегородки</th>
+                {GLASS_CATEGORIES.map((cat) => (
+                  <th className="table-header text-right" key={cat.id}>
+                    {cat.label}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {PARTITION_TYPES.map((partition) => (
-                <tr key={partition.id}>
-                  <td>{partition.label}</td>
-                  {GLASS_CATEGORIES.map((category) => {
-                    const price = findBasePrice(partition.id, category.id);
+              {PARTITION_TYPES.map((pt) => (
+                <tr key={pt.id}>
+                  <td>{pt.label}</td>
+                  {GLASS_CATEGORIES.map((cat) => {
+                    const price = findBasePrice(pt.id, cat.id);
                     return (
-                      <td className="text-right" key={category.id}>
+                      <td className="text-right" key={cat.id}>
                         {price ? (
                           <EditableNumber
-                            label={`Ставка ${partition.label}, ${category.label}`}
+                            label={`${pt.label}, ${cat.label}`}
                             onSave={(amount) => savePrice(price, amount)}
                             status={priceStatus[price.id] || "idle"}
+                            suffix="$"
                             value={price.amount}
                           />
                         ) : (
-                          <span className="text-muted">—</span>
+                          <span className="text-muted">{"\u2014"}</span>
                         )}
                       </td>
                     );
@@ -243,66 +224,139 @@ export default function PriceTable({ initData, materials, onMaterialSaved, onPri
         </div>
       </section>
 
+      {/* ---- 2. Addons ---- */}
       <section className="pricing-section">
         <h3 className="pricing-section-title">Доп. услуги</h3>
         <div className="table-card">
           <table className="data-table">
             <thead>
               <tr>
-                <th className="table-header">Название</th>
-                <th className="table-header">Валюта</th>
-                <th className="table-header text-right">Сумма</th>
+                <th className="table-header">Услуга</th>
+                <th className="table-header text-right">Цена</th>
               </tr>
             </thead>
-            <tbody>{renderPriceRows(addons)}</tbody>
+            <tbody>
+              {addons.map((price) => (
+                <tr key={price.id}>
+                  <td>{price.name}</td>
+                  <td className="mono text-right">
+                    <EditableNumber
+                      label={`Цена ${price.name}`}
+                      onSave={(amount) => savePrice(price, amount)}
+                      status={priceStatus[price.id] || "idle"}
+                      suffix={unitLabel(price)}
+                      value={price.amount}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       </section>
 
+      {/* ---- 3. Modifiers / discount ---- */}
       <section className="pricing-section">
         <h3 className="pricing-section-title">Модификаторы</h3>
         <div className="table-card">
           <table className="data-table">
             <thead>
               <tr>
-                <th className="table-header">Название</th>
-                <th className="table-header">Единица</th>
+                <th className="table-header">Правило</th>
                 <th className="table-header text-right">Значение</th>
               </tr>
             </thead>
-            <tbody>{renderPriceRows(modifiers)}</tbody>
+            <tbody>
+              {modifiers.map((price) => (
+                <tr key={price.id}>
+                  <td>{price.name}</td>
+                  <td className="mono text-right">
+                    <EditableNumber
+                      label={`Модификатор ${price.name}`}
+                      onSave={(amount) => savePrice(price, amount)}
+                      status={priceStatus[price.id] || "idle"}
+                      suffix={unitLabel(price)}
+                      value={price.amount}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       </section>
 
+      {/* ---- 4. Glass materials ---- */}
       <section className="pricing-section">
-        <h3 className="pricing-section-title">Материалы: стекло</h3>
+        <h3 className="pricing-section-title">Стекло</h3>
         <div className="table-card">
           <table className="data-table">
             <thead>
               <tr>
-                <th className="table-header">Материал</th>
-                <th className="table-header">ID</th>
-                <th className="table-header text-right">price_modifier</th>
+                <th className="table-header">Название</th>
+                <th className="table-header text-right">Коэффициент</th>
               </tr>
             </thead>
-            <tbody>{renderMaterials(glassMaterials)}</tbody>
+            <tbody>
+              {glassMaterials.map((mat) => (
+                <tr key={mat.id}>
+                  <td>
+                    <span className="material-name-cell">
+                      <span className="material-swatch" style={{ background: toRgba(mat.color) }} />
+                      <span>{mat.name}</span>
+                    </span>
+                  </td>
+                  <td className="mono text-right">
+                    <EditableNumber
+                      label={`Коэффициент ${mat.name}`}
+                      onSave={(pm) => saveMaterialModifier(mat, pm)}
+                      status={materialStatus[mat.id] || "idle"}
+                      suffix={"\u00D7"}
+                      value={mat.price_modifier ?? 1}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       </section>
 
+      {/* ---- 5. Frame materials ---- */}
       <section className="pricing-section">
-        <h3 className="pricing-section-title">Материалы: профиль</h3>
+        <h3 className="pricing-section-title">Профиль (рамка)</h3>
+        <p className="pricing-section-hint">
+          Коэффициент 1.04 = +4% к стоимости (все кроме чёрного и алюминия).
+        </p>
         <div className="table-card">
           <table className="data-table">
             <thead>
               <tr>
-                <th className="table-header">Материал</th>
-                <th className="table-header">ID</th>
-                <th className="table-header text-right">price_modifier</th>
+                <th className="table-header">Цвет рамки</th>
+                <th className="table-header text-right">Коэффициент</th>
               </tr>
             </thead>
-            <tbody>{renderMaterials(frameMaterials)}</tbody>
+            <tbody>
+              {frameMaterials.map((mat) => (
+                <tr key={mat.id}>
+                  <td>
+                    <span className="material-name-cell">
+                      <span className="material-swatch" style={{ background: toRgba(mat.color) }} />
+                      <span>{mat.name}</span>
+                    </span>
+                  </td>
+                  <td className="mono text-right">
+                    <EditableNumber
+                      label={`Коэффициент ${mat.name}`}
+                      onSave={(pm) => saveMaterialModifier(mat, pm)}
+                      status={materialStatus[mat.id] || "idle"}
+                      suffix={"\u00D7"}
+                      value={mat.price_modifier ?? 1}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       </section>

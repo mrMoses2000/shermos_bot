@@ -44,3 +44,43 @@ async def test_handle_clear_command(monkeypatch):
     assert handled is True
     assert ("clear", 100) in calls
     assert sender.messages[0][2] == "История диалога очищена."
+
+
+@pytest.mark.asyncio
+async def test_send_render_result_includes_detailed_price_caption():
+    from tests.helpers import FakeSender as RenderSender
+
+    sender = RenderSender()
+    job = Job(update_id=1, chat_id=100, user_id=100, text="рендер")
+    result = {
+        "render_paths": {"0deg": "/tmp/render.png"},
+        "order": {"request_id": "order-9"},
+        "price": {
+            "total_price": 1203.2,
+            "currency": "USD",
+            "details": {
+                "area_sq_m": 6,
+                "partition_type": "sliding_2",
+                "base_rate_per_sqm": 170,
+                "base_price": 1020,
+                "matting": "matting_solid",
+                "matting_price": 42,
+                "complex_pattern_price": 18,
+                "frame_surcharge": 43.2,
+                "volume_discount": 0,
+                "handle_price": 80,
+                "rows": 1,
+                "cols": 2,
+            },
+        },
+    }
+
+    await worker._send_render_result(job, object(), sender, result)
+
+    caption = sender.photos[0][3]
+    assert "Тип:" in caption
+    assert "Раздвижная 2 створки" in caption
+    assert "Площадь:" in caption
+    assert "Базовая ставка:" in caption
+    assert "Сплошная матировка: +42 $" in caption
+    assert "Итого:" in caption
