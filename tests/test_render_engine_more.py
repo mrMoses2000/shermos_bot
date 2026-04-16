@@ -73,3 +73,15 @@ async def test_render_partition_uses_request_directory(monkeypatch, tmp_path):
 
     assert seen["dir"] == tmp_path / "abc"
     assert result["render_paths"]["0deg"].endswith("partition_render_hq_0deg.png")
+
+
+@pytest.mark.asyncio
+async def test_render_partition_rejects_l_shape_without_side(tmp_path):
+    settings = type("Settings", (), {"renders_dir": str(tmp_path)})
+
+    with pytest.raises(ValueError, match="сторону боковой стены"):
+        await render_engine.render_partition(
+            RenderPartitionAction(shape="Г-образная", height=2.5, width_a=3, width_b=1),
+            "abc",
+            settings,
+        )

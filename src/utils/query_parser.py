@@ -29,6 +29,21 @@ HANDLE_POSITION_ALIASES = {
     "справа": "Право",
 }
 
+SHAPE_SIDE_ALIASES = {
+    "left": "left",
+    "лево": "left",
+    "слева": "left",
+    "левая": "left",
+    "левой": "left",
+    "left side": "left",
+    "right": "right",
+    "право": "right",
+    "справа": "right",
+    "правая": "right",
+    "правой": "right",
+    "right side": "right",
+}
+
 PARTITION_TYPE_ALIASES = {
     "стационарная": "fixed",
     "стационарный": "fixed",
@@ -81,6 +96,13 @@ def normalize_handle_position(value: str | None) -> str:
     return HANDLE_POSITION_ALIASES.get(stripped.lower(), stripped)
 
 
+def normalize_shape_side(value: str | None) -> str | None:
+    if not value:
+        return None
+    stripped = value.strip()
+    return SHAPE_SIDE_ALIASES.get(stripped.lower(), stripped.lower())
+
+
 def normalize_partition_type(value: str | None) -> str:
     if not value:
         return "sliding_2"
@@ -98,6 +120,8 @@ def normalize_matting(value: str | None) -> str:
 def normalize_render_params(params: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(params)
     normalized["shape"] = normalize_shape(normalized.get("shape"))
+    if "shape_side" in normalized:
+        normalized["shape_side"] = normalize_shape_side(normalized.get("shape_side"))
     normalized["handle_position"] = normalize_handle_position(normalized.get("handle_position"))
     normalized["partition_type"] = normalize_partition_type(normalized.get("partition_type"))
     normalized["matting"] = normalize_matting(normalized.get("matting"))

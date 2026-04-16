@@ -18,10 +18,12 @@ from typing import Any
 from src.engine.fsm import format_summary, get_missing_params
 from src.llm.tools_schema import get_tools_schema
 from src.utils.config_manager import config
+from src.utils.json_tools import ensure_json_object
 
 # Human-readable labels for render parameters
 _PARAM_LABELS = {
     "shape": "Форма перегородки (Прямая / Г-образная / П-образная)",
+    "shape_side": "Сторона боковой стены для Г-образной формы (left / right)",
     "partition_type": "Тип перегородки (стационарная / раздвижная 2, 3 или 4 створки)",
     "height": "Высота (метры, 0.5–5.0)",
     "width_a": "Ширина A (метры, 0.3–10.0)",
@@ -50,7 +52,7 @@ def _materials_section() -> str:
 
 def _missing_params_section(state: dict[str, Any]) -> str:
     """Build explicit list of parameters Gemini still needs to collect."""
-    collected = state.get("collected_params", {})
+    collected = ensure_json_object(state.get("collected_params", {}))
     shape = collected.get("shape")
     missing = get_missing_params(collected, shape)
     if not missing:
@@ -79,7 +81,7 @@ def _slots_section(available_slots: dict[str, list[str]] | None) -> str:
 
 def _collected_summary(state: dict[str, Any]) -> str:
     """Show what's already collected in human-readable form."""
-    collected = state.get("collected_params", {})
+    collected = ensure_json_object(state.get("collected_params", {}))
     if not collected:
         return "Пока ничего не собрано."
     return format_summary(collected)
@@ -100,6 +102,7 @@ def build_prompt(
         profile_text = f"Имя: {name}, Телефон: {phone}, Адрес: {address}"
 
     state = conversation_state or {"mode": "idle", "step": None, "collected_params": {}}
+    state["collected_params"] = ensure_json_object(state.get("collected_params", {}))
     history_lines = []
     for message in chat_messages:
         role = "Клиент" if message.get("role") == "user" else "Ассистент"
@@ -142,6 +145,7 @@ def build_prompt(
 {_materials_section()}
 
 Доступные формы: Прямая, Г-образная (2 стены), П-образная (3 стены).
+Для Г-образной формы обязательно сохрани shape_side: "left", если боковая сторона слева, или "right", если справа.
 Типы перегородок: fixed (стационарная), sliding_2, sliding_3, sliding_4.
 Матировка: none, matting_solid, matting_stripes, matting_logo. Сложный рисунок вставок: complex_pattern=true.
 Ручки: Современный / Классический. Позиция: Лево / Центр / Право.

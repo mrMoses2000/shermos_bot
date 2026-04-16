@@ -5,22 +5,53 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Iterable
+from uuid import uuid4
 
 import asyncpg
 
-
-def _json(value: Any) -> str:
-    return json.dumps(value if value is not None else {}, ensure_ascii=False)
+from src.utils.json_tools import ensure_json_array, ensure_json_object
 
 
-def _row_to_dict(row: Any) -> dict[str, Any] | None:
+def _json(value: Any) -> Any:
+    return value if value is not None else {}
+
+
+def _normalize_json_fields(
+    data: dict[str, Any],
+    *,
+    object_fields: Iterable[str] = (),
+    array_fields: Iterable[str] = (),
+) -> dict[str, Any]:
+    for field in object_fields:
+        if field in data and data[field] is not None:
+            data[field] = ensure_json_object(data[field])
+    for field in array_fields:
+        if field in data and data[field] is not None:
+            data[field] = ensure_json_array(data[field])
+    return data
+
+
+def _row_to_dict(
+    row: Any,
+    *,
+    object_fields: Iterable[str] = (),
+    array_fields: Iterable[str] = (),
+) -> dict[str, Any] | None:
     if row is None:
         return None
-    return dict(row)
+    return _normalize_json_fields(dict(row), object_fields=object_fields, array_fields=array_fields)
 
 
-def _rows_to_dicts(rows: Iterable[Any]) -> list[dict[str, Any]]:
-    return [dict(row) for row in rows]
+def _rows_to_dicts(
+    rows: Iterable[Any],
+    *,
+    object_fields: Iterable[str] = (),
+    array_fields: Iterable[str] = (),
+) -> list[dict[str, Any]]:
+    return [
+        _normalize_json_fields(dict(row), object_fields=object_fields, array_fields=array_fields)
+        for row in rows
+    ]
 
 
 async def _init_connection(conn: asyncpg.Connection) -> None:
@@ -179,12 +210,12 @@ async def get_pending_outbound(pool, limit: int = 20) -> list[dict[str, Any]]:
         """,
         limit,
     )
-    return _rows_to_dicts(rows)
+    return _rows_to_dicts(rows, object_fields=("reply_markup",))
 
 
 async def get_conversation_state(pool, chat_id: int) -> dict[str, Any] | None:
     row = await pool.fetchrow("SELECT * FROM conversation_state WHERE chat_id=$1", chat_id)
-    return _row_to_dict(row)
+    return _row_to_dict(row, object_fields=("collected_params",))
 
 
 async def upsert_conversation_state(
@@ -208,9 +239,9 @@ async def upsert_conversation_state(
         chat_id,
         mode,
         step,
-        _json(collected_params),
+        ensure_json_object(collected_params),
     )
-    return dict(row)
+    return _row_to_dict(row, object_fields=("collected_params",)) or {}
 
 
 async def insert_chat_message(pool, chat_id: int, role: str, text: str) -> int:
@@ -243,6 +274,84 @@ async def get_chat_messages(pool, chat_id: int, limit: int = 20) -> list[dict[st
 
 async def clear_chat_messages(pool, chat_id: int) -> None:
     await pool.execute("DELETE FROM chat_messages WHERE chat_id=$1", chat_id)
+
+
+async def get_active_order_draft(pool, chat_id: int) -> dict[str, Any] | None:
+    row = await pool.fetchrow(
+        """
+        SELECT *
+        FROM order_drafts
+        WHERE chat_id=$1 AND status IN ('collecting', 'confirming', 'rendering')
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        chat_id,
+    )
+    return _row_to_dict(row, object_fields=("collected_params",))
+
+
+async def upsert_order_draft(
+    pool,
+    chat_id: int,
+    collected_params: dict | None,
+    status: str = "collecting",
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    status = status if status in {"collecting", "confirming", "rendering"} else "collecting"
+    row = await pool.fetchrow(
+        """
+        WITH current AS (
+            SELECT request_id
+            FROM order_drafts
+            WHERE chat_id=$1 AND status IN ('collecting', 'confirming', 'rendering')
+            ORDER BY updated_at DESC
+            LIMIT 1
+        ),
+        updated AS (
+            UPDATE order_drafts
+            SET status=$2,
+                collected_params=$3::jsonb,
+                updated_at=now()
+            WHERE request_id = (SELECT request_id FROM current)
+            RETURNING *
+        ),
+        inserted AS (
+            INSERT INTO order_drafts (request_id, chat_id, status, collected_params)
+            SELECT $4, $1, $2, $3::jsonb
+            WHERE NOT EXISTS (SELECT 1 FROM updated)
+            RETURNING *
+        )
+        SELECT * FROM updated
+        UNION ALL
+        SELECT * FROM inserted
+        LIMIT 1
+        """,
+        chat_id,
+        status,
+        ensure_json_object(collected_params),
+        request_id or str(uuid4()),
+    )
+    return _row_to_dict(row, object_fields=("collected_params",)) or {}
+
+
+async def mark_active_order_draft_rendered(pool, chat_id: int, order_request_id: str) -> None:
+    await pool.execute(
+        """
+        UPDATE order_drafts
+        SET status='rendered',
+            rendered_order_id=$2,
+            updated_at=now()
+        WHERE request_id = (
+            SELECT request_id
+            FROM order_drafts
+            WHERE chat_id=$1 AND status IN ('collecting', 'confirming', 'rendering')
+            ORDER BY updated_at DESC
+            LIMIT 1
+        )
+        """,
+        chat_id,
+        order_request_id,
+    )
 
 
 async def get_client_by_chat_id(pool, chat_id: int) -> dict[str, Any] | None:
@@ -341,15 +450,18 @@ async def create_order(
         """,
         request_id,
         chat_id,
-        _json(details_json),
-        _json(render_paths),
-        _json(price),
+        ensure_json_object(details_json),
+        ensure_json_object(render_paths),
+        ensure_json_object(price),
     )
-    return dict(row)
+    return _row_to_dict(row, object_fields=("details_json", "render_paths", "price")) or {}
 
 
 async def get_order(pool, request_id: str) -> dict[str, Any] | None:
-    return _row_to_dict(await pool.fetchrow("SELECT * FROM orders WHERE request_id=$1", request_id))
+    return _row_to_dict(
+        await pool.fetchrow("SELECT * FROM orders WHERE request_id=$1", request_id),
+        object_fields=("details_json", "render_paths", "price"),
+    )
 
 
 async def list_orders(
@@ -382,7 +494,7 @@ async def list_orders(
         """,
         *values,
     )
-    return _rows_to_dicts(rows)
+    return _rows_to_dicts(rows, object_fields=("details_json", "render_paths", "price"))
 
 
 async def update_order_status(pool, request_id: str, status: str, note: str = "") -> dict[str, Any]:
@@ -399,7 +511,7 @@ async def update_order_status(pool, request_id: str, status: str, note: str = ""
     )
     if row is None:
         raise ValueError(f"Order not found: {request_id}")
-    return dict(row)
+    return _row_to_dict(row, object_fields=("details_json", "render_paths", "price")) or {}
 
 
 async def count_orders_by_status(pool) -> dict[str, int]:
@@ -478,7 +590,10 @@ async def get_measurements_for_client(pool, chat_id: int) -> list[dict[str, Any]
 
 
 async def get_prices(pool) -> list[dict[str, Any]]:
-    return _rows_to_dicts(await pool.fetch("SELECT * FROM prices ORDER BY category, id"))
+    return _rows_to_dicts(
+        await pool.fetch("SELECT * FROM prices ORDER BY category, id"),
+        object_fields=("metadata",),
+    )
 
 
 async def update_price(pool, price_id: str, **fields: Any) -> dict[str, Any]:
@@ -488,11 +603,11 @@ async def update_price(pool, price_id: str, **fields: Any) -> dict[str, Any]:
         row = await pool.fetchrow("SELECT * FROM prices WHERE id=$1", price_id)
         if row is None:
             raise ValueError(f"Price not found: {price_id}")
-        return dict(row)
+        return _row_to_dict(row, object_fields=("metadata",)) or {}
     values: list[Any] = []
     fragments: list[str] = []
     for key, value in updates.items():
-        values.append(_json(value) if key == "metadata" else value)
+        values.append(ensure_json_object(value) if key == "metadata" else value)
         cast = "::jsonb" if key == "metadata" else ""
         fragments.append(f"{key}=${len(values) + 1}{cast}")
     row = await pool.fetchrow(
@@ -502,7 +617,7 @@ async def update_price(pool, price_id: str, **fields: Any) -> dict[str, Any]:
     )
     if row is None:
         raise ValueError(f"Price not found: {price_id}")
-    return dict(row)
+    return _row_to_dict(row, object_fields=("metadata",)) or {}
 
 
 async def seed_default_prices(pool) -> None:
@@ -525,7 +640,11 @@ async def seed_default_prices(pool) -> None:
 
 
 async def get_materials(pool) -> list[dict[str, Any]]:
-    return _rows_to_dicts(await pool.fetch("SELECT * FROM materials ORDER BY kind, id"))
+    return _rows_to_dicts(
+        await pool.fetch("SELECT * FROM materials ORDER BY kind, id"),
+        object_fields=("metadata",),
+        array_fields=("color",),
+    )
 
 
 async def update_material(pool, material_id: str, **fields: Any) -> dict[str, Any]:
@@ -534,7 +653,12 @@ async def update_material(pool, material_id: str, **fields: Any) -> dict[str, An
     values: list[Any] = []
     fragments: list[str] = []
     for key, value in updates.items():
-        values.append(_json(value) if key in {"color", "metadata"} else value)
+        if key == "metadata":
+            values.append(ensure_json_object(value))
+        elif key == "color":
+            values.append(ensure_json_array(value))
+        else:
+            values.append(value)
         cast = "::jsonb" if key in {"color", "metadata"} else ""
         fragments.append(f"{key}=${len(values) + 1}{cast}")
     if not fragments:
@@ -547,7 +671,7 @@ async def update_material(pool, material_id: str, **fields: Any) -> dict[str, An
         )
     if row is None:
         raise ValueError(f"Material not found: {material_id}")
-    return dict(row)
+    return _row_to_dict(row, object_fields=("metadata",), array_fields=("color",)) or {}
 
 
 async def seed_default_materials(pool) -> None:

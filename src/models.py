@@ -23,6 +23,7 @@ class Job(BaseModel):
 
 class RenderPartitionAction(BaseModel):
     shape: str
+    shape_side: Optional[str] = None
     height: float
     width_a: float
     width_b: Optional[float] = None

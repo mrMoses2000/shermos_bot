@@ -30,10 +30,14 @@ class FakePool:
 
 
 def test_json_and_row_helpers():
-    assert postgres._json(None) == "{}"
-    assert postgres._json({"a": "б"}) == '{"a": "б"}'
+    assert postgres._json(None) == {}
+    assert postgres._json({"a": "б"}) == {"a": "б"}
     assert postgres._row_to_dict(None) is None
     assert postgres._row_to_dict({"a": 1}) == {"a": 1}
+    assert postgres._row_to_dict(
+        {"collected_params": '{"shape": "Г-образная"}'},
+        object_fields=("collected_params",),
+    ) == {"collected_params": {"shape": "Г-образная"}}
     assert postgres._rows_to_dicts([{"a": 1}, {"b": 2}]) == [{"a": 1}, {"b": 2}]
 
 
@@ -62,20 +66,31 @@ async def test_inbound_outbound_queries_serialize_json():
 
     assert inbound_id == 42
     assert outbound_id == 42
-    assert '"hello": "world"' in pool.calls[0][2][-1]
-    assert '"k": 1' in pool.calls[1][2][3]
+    assert pool.calls[0][2][-1] == {"hello": "world"}
+    assert pool.calls[1][2][3] == {"k": 1}
 
 
 @pytest.mark.asyncio
 async def test_conversation_and_messages_queries():
-    pool = FakePool(fetchrow_result={"chat_id": 1, "mode": "idle"}, fetch_result=[{"text": "hi"}])
+    pool = FakePool(
+        fetchrow_result={"chat_id": 1, "mode": "idle", "collected_params": '{"shape": "Прямая"}'},
+        fetch_result=[{"text": "hi"}],
+    )
 
     state = await postgres.upsert_conversation_state(pool, 1, "idle", None, {})
+    fetched = await postgres.get_conversation_state(pool, 1)
     messages = await postgres.get_chat_messages(pool, 1, limit=1)
     await postgres.insert_chat_message(pool, 1, "user", "hi")
     await postgres.clear_chat_messages(pool, 1)
+    pool.fetchrow_result = {"request_id": "draft-1", "chat_id": 1, "collected_params": '{"shape": "Прямая"}'}
+    draft = await postgres.get_active_order_draft(pool, 1)
+    upserted_draft = await postgres.upsert_order_draft(pool, 1, {"shape": "Прямая"})
+    await postgres.mark_active_order_draft_rendered(pool, 1, "draft-1")
 
     assert state["mode"] == "idle"
+    assert fetched["collected_params"] == {"shape": "Прямая"}
+    assert draft["collected_params"] == {"shape": "Прямая"}
+    assert upserted_draft["request_id"] == "draft-1"
     assert messages == [{"text": "hi"}]
     assert pool.calls[-1][0] == "execute"
 

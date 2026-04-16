@@ -10,11 +10,11 @@ from pydantic import ValidationError
 
 from src.models import (
     ActionsJson,
-    RenderPartitionAction,
     ScheduleMeasurementAction,
     StatePatch,
     UpdateClientProfileAction,
 )
+from src.utils.json_tools import ensure_json_object
 
 FALLBACK = ActionsJson(reply_text="Ошибка, попробуйте снова", actions=None)
 
@@ -73,7 +73,7 @@ def _validate_nested(actions: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     cleaned = {key: value for key, value in actions.items() if value is not None}
     if "render_partition" in cleaned:
-        cleaned["render_partition"] = RenderPartitionAction(**cleaned["render_partition"]).model_dump()
+        cleaned["render_partition"] = ensure_json_object(cleaned["render_partition"])
     if "schedule_measurement" in cleaned:
         cleaned["schedule_measurement"] = ScheduleMeasurementAction(
             **cleaned["schedule_measurement"]
@@ -83,7 +83,10 @@ def _validate_nested(actions: dict[str, Any] | None) -> dict[str, Any] | None:
             **cleaned["update_client_profile"]
         ).model_dump()
     if "state_patch" in cleaned:
-        cleaned["state_patch"] = StatePatch(**cleaned["state_patch"]).model_dump()
+        state_patch = ensure_json_object(cleaned["state_patch"])
+        if "collected_params" in state_patch:
+            state_patch["collected_params"] = ensure_json_object(state_patch["collected_params"])
+        cleaned["state_patch"] = StatePatch(**state_patch).model_dump()
     return cleaned or None
 
 

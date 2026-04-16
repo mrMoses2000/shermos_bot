@@ -68,6 +68,10 @@ class PartitionValidator:
             (valid, error_message): Кортеж с результатом валидации
         """
         shape = params.get('shape')
+        if shape == 'Г-образная':
+            shape_side = str(params.get('shape_side') or '').strip().lower()
+            if shape_side not in ('left', 'right'):
+                return False, "Для Г-образной формы укажите сторону боковой стены: left или right"
         
         # Проверка высоты
         height_raw = params.get('height')

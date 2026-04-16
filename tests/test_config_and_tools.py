@@ -6,6 +6,7 @@ from src.utils.query_parser import (
     normalize_partition_type,
     normalize_render_params,
     normalize_shape,
+    normalize_shape_side,
 )
 
 
@@ -29,10 +30,13 @@ def test_tools_schema_and_query_normalization():
     assert normalize_shape("угловая") == "Г-образная"
     assert normalize_shape(None) == "Прямая"
     assert normalize_handle_position("слева") == "Лево"
+    assert normalize_shape_side("слева") == "left"
+    assert normalize_shape_side("справа") == "right"
     assert normalize_partition_type("3 створки") == "sliding_3"
     assert normalize_matting("полосы") == "matting_stripes"
-    params = normalize_render_params({"shape": "u", "width_b": "", "width_c": 0, "door_section": 2})
+    params = normalize_render_params({"shape": "u", "shape_side": "слева", "width_b": "", "width_c": 0, "door_section": 2})
     assert params["shape"] == "П-образная"
+    assert params["shape_side"] == "left"
     assert params["partition_type"] == "sliding_2"
     assert params["matting"] == "none"
     assert params["width_b"] is None

@@ -80,6 +80,12 @@ def _sync_render(params: dict[str, Any], output_dir: Path) -> dict[str, str]:
 
 async def render_partition(params: RenderPartitionAction, request_id: str, settings) -> dict[str, Any]:
     render_params = _render_params(params)
+    from src.render.validators import validate_partition_params
+
+    valid, errors = validate_partition_params(render_params)
+    if not valid:
+        raise ValueError("; ".join(errors))
+
     output_dir = Path(settings.renders_dir) / request_id
     output_dir.mkdir(parents=True, exist_ok=True)
     params_file = output_dir / "_render_params.json"

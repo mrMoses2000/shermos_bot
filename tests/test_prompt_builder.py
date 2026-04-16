@@ -8,6 +8,24 @@ def test_missing_params_section_lists_required_fields():
     assert "Ширина C" in section
 
 
+def test_missing_params_section_requires_l_shape_side():
+    section = _missing_params_section({"collected_params": {"shape": "Г-образная", "height": 2.5, "width_a": 2}})
+
+    assert "Сторона боковой стены" in section
+
+
+def test_build_prompt_handles_double_encoded_collected_params():
+    prompt = build_prompt(
+        "ширина 2 метра",
+        None,
+        {"mode": "collecting", "step": "ask_dimensions", "collected_params": '{"shape": "Г-образная"}'},
+        [],
+    )
+
+    assert "Форма: Г-образная" in prompt
+    assert "Сторона боковой стены" in prompt
+
+
 def test_missing_params_section_when_complete():
     section = _missing_params_section(
         {

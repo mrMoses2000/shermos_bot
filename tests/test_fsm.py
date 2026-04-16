@@ -9,9 +9,17 @@ def test_fsm_transitions_and_missing_params():
     assert "width_b" in missing
     assert "width_c" in missing
 
+    l_missing = get_missing_params({"shape": "Г-образная", "height": 2.5, "width_a": 2, "width_b": 1})
+    assert "shape_side" in l_missing
+
 
 def test_format_summary():
     summary = format_summary({"shape": "Прямая", "height": 2.6, "width_a": 3})
 
     assert "Параметры" in summary
     assert "Прямая" in summary
+
+
+def test_format_summary_ignores_bad_payload():
+    assert format_summary('{"shape": "Прямая"}').endswith("Прямая")
+    assert format_summary("not json") == "<b>Параметры перегородки:</b>"
