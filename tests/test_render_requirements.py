@@ -31,6 +31,27 @@ def test_missing_render_params_requires_l_shape_side():
     assert missing == ["shape_side"]
 
 
+def test_missing_render_params_requires_handle_location_when_handle_enabled():
+    missing = missing_render_params(
+        {
+            "shape": "Г-образная",
+            "shape_side": "right",
+            "height": 2,
+            "width_a": 3,
+            "width_b": 1,
+            "partition_type": "fixed",
+            "glass_type": "1",
+            "frame_color": "1",
+            "matting": "none",
+            "add_handle": True,
+            "rows": 1,
+            "cols": 2,
+        }
+    )
+
+    assert missing == ["handle_sections", "handle_wall"]
+
+
 def test_merge_render_params_preserves_current_order_draft_values():
     merged = merge_render_params(
         {"shape": "Г-образная", "shape_side": "left", "height": 2},

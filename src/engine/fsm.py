@@ -19,6 +19,14 @@ def is_valid_transition(current_mode: str, next_mode: str) -> bool:
     return next_mode in VALID_TRANSITIONS.get(current_mode or "idle", set())
 
 
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "да", "нужна", "нужен", "нужно", "хочу"}
+    return bool(value)
+
+
 def get_missing_params(collected_params: dict[str, Any], shape: str | None = None) -> list[str]:
     collected_params = ensure_json_object(collected_params)
     shape_value = shape or collected_params.get("shape")
@@ -40,6 +48,10 @@ def get_missing_params(collected_params: dict[str, Any], shape: str | None = Non
         required.append("shape_side")
     if shape_value == "П-образная":
         required.append("width_c")
+    if _is_truthy(collected_params.get("add_handle")):
+        required.append("handle_sections")
+        if shape_value in {"Г-образная", "П-образная"}:
+            required.append("handle_wall")
     return [key for key in required if collected_params.get(key) in (None, "")]
 
 

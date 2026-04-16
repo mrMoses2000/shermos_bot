@@ -14,6 +14,30 @@ def test_missing_params_section_requires_l_shape_side():
     assert "Сторона боковой стены" in section
 
 
+def test_missing_params_section_requires_handle_section_and_wall():
+    section = _missing_params_section(
+        {
+            "collected_params": {
+                "shape": "Г-образная",
+                "shape_side": "right",
+                "height": 2.5,
+                "width_a": 3,
+                "width_b": 1,
+                "partition_type": "fixed",
+                "glass_type": "1",
+                "frame_color": "1",
+                "matting": "none",
+                "add_handle": True,
+                "rows": 1,
+                "cols": 2,
+            }
+        }
+    )
+
+    assert "Номера секций с ручкой" in section
+    assert "На какой стороне ручка" in section
+
+
 def test_build_prompt_handles_double_encoded_collected_params():
     prompt = build_prompt(
         "ширина 2 метра",
