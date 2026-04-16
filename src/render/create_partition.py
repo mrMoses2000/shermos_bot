@@ -727,17 +727,7 @@ def render_scene(frame_mesh, glass_mesh, params, handle_mesh=None, y_rotation_de
     # чтобы расстояние между секциями не менялось от ракурса к ракурсу.
     aspect_ratio = float(IMG_WIDTH) / IMG_HEIGHT
     max_extent = np.max(frame_mesh.extents)
-    horizontal_diag = float(np.linalg.norm(frame_mesh.extents[[0, 2]]))
-    view_half_width = max(horizontal_diag * 0.62, 1.0)
-    view_half_height = max(float(frame_mesh.extents[1]) * 0.62, view_half_width / aspect_ratio, 1.0)
     camera_distance = max(max_extent * 3.0, 4.0)
-
-    camera = pyrender.OrthographicCamera(
-        xmag=view_half_width,
-        ymag=view_half_height,
-        znear=0.05,
-        zfar=1000.0,
-    )
 
     # Углы для камеры
     y_rot_angle = np.radians(y_rotation_deg)
@@ -747,13 +737,34 @@ def render_scene(frame_mesh, glass_mesh, params, handle_mesh=None, y_rotation_de
     cam_rotation_y = trimesh.transformations.rotation_matrix(y_rot_angle, [0, 1, 0])
     cam_rotation_x = trimesh.transformations.rotation_matrix(x_rot_angle, [1, 0, 0])
     cam_rotation = cam_rotation_y @ cam_rotation_x
-    cam_translation = trimesh.transformations.translation_matrix([0, 0, camera_distance])
-    
-    camera_pose = cam_rotation @ cam_translation
-    
-    # Safe height access
-    height_val = float(params.get('height', 3.0))
-    camera_pose[1, 3] = height_val * 0.2
+
+    bounds = frame_mesh.bounds
+    target = bounds.mean(axis=0)
+    corners = np.array([
+        [bounds[x, 0], bounds[y, 1], bounds[z, 2]]
+        for x in (0, 1)
+        for y in (0, 1)
+        for z in (0, 1)
+    ])
+    camera_space = (cam_rotation[:3, :3].T @ (corners - target).T).T
+    span_x = float(camera_space[:, 0].max() - camera_space[:, 0].min())
+    span_y = float(camera_space[:, 1].max() - camera_space[:, 1].min())
+    view_half_width = max(span_x * 0.75, 1.0)
+    view_half_height = max(span_y * 0.75, 1.0)
+    if view_half_width / view_half_height < aspect_ratio:
+        view_half_width = view_half_height * aspect_ratio
+    else:
+        view_half_height = view_half_width / aspect_ratio
+
+    camera = pyrender.OrthographicCamera(
+        xmag=view_half_width,
+        ymag=view_half_height,
+        znear=0.05,
+        zfar=1000.0,
+    )
+
+    camera_pose = cam_rotation.copy()
+    camera_pose[:3, 3] = target + cam_rotation[:3, :3] @ np.array([0, 0, camera_distance])
 
     scene.add(camera, pose=camera_pose)
 
