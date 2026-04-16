@@ -37,7 +37,7 @@ export default function PricingEditor({ initData }: { initData: string }) {
     <div className="page-stack">
       <div className="section-heading">
         <h2 className="section-title">Цены</h2>
-        <p className="section-subtitle">Базовые ставки, допуслуги, модификаторы и материалы из PostgreSQL.</p>
+        <p className="section-subtitle">Нажмите на число, чтобы изменить цену.</p>
       </div>
       <PriceTable
         initData={initData}

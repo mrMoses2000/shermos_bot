@@ -23,12 +23,23 @@ def _rows_to_dicts(rows: Iterable[Any]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """Register JSON/JSONB codecs so metadata comes back as dict, not str."""
+    await conn.set_type_codec(
+        "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
+    await conn.set_type_codec(
+        "json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
+
+
 async def create_pool(settings) -> asyncpg.Pool:
     return await asyncpg.create_pool(
         dsn=settings.postgres_dsn,
         min_size=2,
         max_size=10,
         timeout=30,
+        init=_init_connection,
     )
 
 
@@ -568,7 +579,7 @@ async def get_dashboard_stats(pool, days: int = 30) -> dict[str, Any]:
             COALESCE(sum((price->>'total_price')::numeric), 0)::float AS total_revenue,
             count(*) FILTER (WHERE created_at::date = current_date)::int AS orders_today
         FROM orders
-        WHERE created_at >= now() - ($1::text || ' days')::interval
+        WHERE created_at >= now() - ($1 * interval '1 day')
         """,
         days,
     )

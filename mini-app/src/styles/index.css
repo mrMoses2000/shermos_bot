@@ -351,10 +351,11 @@ html[data-theme="dark"] .tab-button.is-active {
 }
 
 .table-card {
-  overflow: hidden;
+  overflow-x: auto;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-bg);
+  -webkit-overflow-scrolling: touch;
 }
 
 .data-table {
@@ -376,6 +377,7 @@ html[data-theme="dark"] .tab-button.is-active {
   line-height: 1.45;
   padding: var(--space-3) var(--space-4);
   vertical-align: middle;
+  overflow-wrap: anywhere;
 }
 
 .data-table tbody tr {
@@ -440,6 +442,7 @@ html[data-theme="dark"] .tab-button.is-active {
   background: transparent;
   color: var(--color-text-primary);
   padding: 4px 6px;
+  white-space: nowrap;
   transition:
     background var(--transition-fast),
     border-color var(--transition-fast);
@@ -700,8 +703,22 @@ html[data-theme="dark"] .tab-button.is-active {
     table-layout: auto;
   }
 
-  .data-table th:nth-child(2),
-  .data-table td:nth-child(2) {
-    display: none;
+  .data-table th,
+  .data-table td {
+    padding: 10px var(--space-3);
+  }
+
+  .pricing-stack .data-table th:first-child,
+  .pricing-stack .data-table td:first-child {
+    width: 58%;
+  }
+
+  .pricing-stack .data-table th:last-child,
+  .pricing-stack .data-table td:last-child {
+    width: 42%;
+  }
+
+  .pricing-stack .inline-edit-button {
+    min-width: 0;
   }
 }

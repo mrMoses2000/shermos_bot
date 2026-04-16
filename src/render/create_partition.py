@@ -368,52 +368,31 @@ def _create_wall_segment(width, height, rows, cols, frame_thickness, vertical_mu
 
 def apply_discounts(params):
     """
-    Применяет скидки и дополнительные начисления согласно прайсу.
+    Backward-compatible total price helper.
+
+    The authoritative pricing formula lives in src.engine.pricing_engine so the
+    renderer cannot drift from the database-backed price catalog.
     """
-    # Определяем цвета стекла для расчета цен
-    glass_colors = {
-        '1': ('Прозрачное', [0.85, 0.85, 0.85, 0.3]),
-        '2': ('Серое', [0.7, 0.7, 0.7, 0.3]),
-        '3': ('Бронза', [0.6, 0.5, 0.4, 0.3]),
-        '4': ('Рифленое', [0.8, 0.8, 0.8, 0.35])
-    }
-    
-    w_a = float(params.get('width_a', 2.0))
-    h = float(params.get('height', 3.0))
-    shape = params.get('shape', 'Прямая')
-    
-    area = w_a * h
-    if shape in ['Г-образная', 'П-образная']:
-        area += float(params.get('width_b', 0)) * h
-        if shape == 'П-образная':
-            area += float(params.get('width_c', 0)) * h
-    
-    # Скидка за большой размер
-    if area > 8:
-        discount = 0.06 
-    else:
-        discount = 0.0
+    from src.engine.pricing_engine import calculate_price
+    from src.utils.query_parser import normalize_render_params
 
-    # Доплата за цвет рамки
-    # Сравниваем списки безопасно
-    default_color = [0.05, 0.05, 0.05, 1.0]
-    frame_color = params.get('frame_color', default_color)
-    
-    if frame_color != default_color:
-        surcharge = 0.04
-    else:
-        surcharge = 0.0
-
-    # Доплата за матирование
-    # Проверяем на совпадение с серым цветом
-    current_glass_color = params.get('glass_color', glass_colors['1'][1])
-    if current_glass_color == glass_colors['2'][1]:  # Серое
-        surcharge += 0.07
-
-    price_per_sq_m = 150 if current_glass_color == glass_colors['1'][1] else 170
-
-    total_price = area * price_per_sq_m * (1 + surcharge) * (1 - discount)
-    return total_price
+    normalized = normalize_render_params(params)
+    price = calculate_price(
+        shape=normalized["shape"],
+        height=float(normalized.get("height") or 3.0),
+        width_a=float(normalized.get("width_a") or 2.0),
+        width_b=float(normalized.get("width_b") or 0),
+        width_c=float(normalized.get("width_c") or 0),
+        glass_type=str(normalized.get("glass_type") or "1"),
+        frame_color=str(normalized.get("frame_color_id") or normalized.get("frame_color") or "1"),
+        rows=int(normalized.get("rows") or 1),
+        cols=int(normalized.get("cols") or 2),
+        add_handle=bool(normalized.get("add_handle")),
+        partition_type=str(normalized.get("partition_type") or "sliding_2"),
+        matting=str(normalized.get("matting") or "none"),
+        complex_pattern=bool(normalized.get("complex_pattern")),
+    )
+    return price["total_price"]
 
 
 

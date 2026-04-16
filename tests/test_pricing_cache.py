@@ -61,6 +61,36 @@ def test_get_base_rate_matrix():
     assert cache.get_base_rate("sliding_4", "4") == 180
 
 
+def test_default_price_catalog_matches_price_pdf():
+    expected_amounts = {
+        "base_sliding2_standard": 150,
+        "base_sliding2_textured": 170,
+        "base_sliding3_standard": 160,
+        "base_sliding3_textured": 180,
+        "base_sliding4_standard": 160,
+        "base_sliding4_textured": 180,
+        "base_fixed_standard": 130,
+        "base_fixed_textured": 150,
+        "addon_matting_solid": 7,
+        "addon_matting_stripes": 12,
+        "addon_matting_logo": 19,
+        "addon_complex_pattern": 3,
+        "mod_frame_nonblack": 4,
+        "mod_volume_discount": 6,
+    }
+
+    for price_id, amount in expected_amounts.items():
+        assert DEFAULT_PRICES[price_id]["amount"] == amount
+
+
+def test_default_material_modifiers_match_price_pdf():
+    for material_id in ("glass_1", "glass_2", "glass_3", "glass_4", "frame_1", "frame_3"):
+        assert DEFAULT_MATERIALS[material_id]["price_modifier"] == 1.0
+
+    for material_id in ("frame_2", "frame_4", "frame_5"):
+        assert DEFAULT_MATERIALS[material_id]["price_modifier"] == 1.04
+
+
 def test_get_base_rate_fallback():
     cache = PricingCache()
 

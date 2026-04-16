@@ -6,16 +6,15 @@
 
 ## ⚡ CURRENT STATUS (2026-04-14 — READ FIRST)
 
-Phases 0-7 COMPLETE. Backend deployed, all services running. Mini App UI redesigned.
-Reliability hardening done. 87 tests, 91.32% coverage.
+Phases 0-8 COMPLETE. Backend deployed, all services running. Mini App UI redesigned.
+Database-driven pricing deployed, 15 prices + 9 materials in PostgreSQL — all match the real PDF price list.
+97 tests, 91.74% coverage.
 
 ### What REMAINS — your task now:
 
-**PHASE 8: Database-Driven Pricing (CRITICAL — prices are wrong!)**
+**PHASE 9: CMS Polish + Detailed Price Breakdown for Client**
 
-Then later: Phase 9+ (Gemini pro admin, extended materials).
-
-**Skip to PHASE 8 section below.**
+**Skip to PHASE 9 section below.**
 
 ### Completed phases (do not re-execute):
 - Phase 5: Architecture Visualization Site
@@ -1652,13 +1651,188 @@ Update existing `test_calculate_price_applies_modifiers_and_discount` to pass a 
 
 ---
 
+---
+
+## PHASE 9: CMS Polish + Detailed Price Breakdown for Client
+
+**Phase 8 is DONE. Execute Phase 9 NOW.**
+
+### Overview
+
+Two problems remain:
+1. **CMS (Mini App)** — the pricing editor has English column headers ("ID", "PRICE_MODIFIER"), no units, no explanatory hints. Must be fully Russian, human-readable, with units ($/м², $/шт, %, ×).
+2. **Client render caption** — when the bot sends a 3D render to the client, the caption only says "Стоимость: 540 USD". It MUST show a full price breakdown: partition type, area, base rate, addons, surcharges, discounts, and total.
+
+### Task 1: CSS for pricing hints
+
+**File:** `mini-app/src/styles/app.css`
+
+Add this class (if it doesn't already exist):
+
+```css
+.pricing-section-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: -0.25rem 0 0.75rem;
+  line-height: 1.3;
+}
+```
+
+Verify that `--text-muted` is defined in `:root`. If not, add:
+```css
+:root {
+  --text-muted: #888;
+}
+[data-theme="dark"] {
+  --text-muted: #999;
+}
+```
+
+### Task 2: PriceTable.tsx — already rewritten
+
+**File:** `mini-app/src/components/PriceTable.tsx`
+
+This file has already been updated locally. **Do NOT overwrite it.** Just verify it compiles with `cd mini-app && npx tsc --noEmit`.
+
+The changes made:
+- Removed "ID" column from material tables — replaced with "Название" / "Коэффициент"
+- Added `suffix` prop to EditableNumber showing units: `$`, `$/м²`, `$/шт`, `%`, `×`
+- Added `unitLabel()` helper that reads metadata to determine the right unit
+- Added `<p className="pricing-section-hint">` under section headings with explanations
+- All headers and labels in Russian
+- Section titles: "Базовые ставки ($/м²)", "Доп. услуги", "Модификаторы", "Стекло", "Профиль (рамка)"
+
+### Task 3: Detailed price caption for client renders
+
+**File:** `src/queue/worker.py`, function `_send_render_result`
+
+Replace the current caption building (lines ~143-147) with a detailed breakdown. The `price` dict returned by `calculate_price()` has a `details` sub-dict with all the data:
+
+```python
+price = {
+    "total_price": 540.0,
+    "currency": "USD",
+    "details": {
+        "area_sq_m": 3.6,
+        "partition_type": "sliding_2",
+        "base_rate_per_sqm": 150,
+        "base_price": 540.0,
+        "matting": "none",
+        "matting_price": 0,
+        "complex_pattern_price": 0,
+        "frame_surcharge": 0,
+        "volume_discount": 0,
+        "handle_price": 0,
+        "rows": 1,
+        "cols": 2
+    }
+}
+```
+
+New `_send_render_result`:
+
+```python
+async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_result: dict[str, Any]) -> None:
+    render_paths = action_result.get("render_paths")
+    if not render_paths:
+        return
+    order = action_result.get("order") or {}
+    price = action_result.get("price") or {}
+    details = price.get("details") or {}
+    paths = [render_paths[key] for key in sorted(render_paths.keys())]
+
+    # Human-readable partition type names
+    pt_names = {
+        "fixed": "Стационарная",
+        "sliding_2": "Раздвижная 2 створки",
+        "sliding_3": "Раздвижная 3 створки",
+        "sliding_4": "Раздвижная 4 створки",
+    }
+    pt = details.get("partition_type", "sliding_2")
+
+    lines = ["<b>Рендер готов</b>"]
+    lines.append(f"Заказ: <code>{order.get('request_id', '')}</code>")
+    lines.append("")
+    lines.append(f"Тип: {pt_names.get(pt, pt)}")
+    lines.append(f"Площадь: {details.get('area_sq_m', '—')} м²")
+    lines.append(f"Базовая ставка: {details.get('base_rate_per_sqm', '—')} $/м²")
+    lines.append(f"Базовая стоимость: {details.get('base_price', '—')} $")
+
+    # Show non-zero addons
+    matting_price = details.get("matting_price", 0)
+    if matting_price:
+        matting_names = {
+            "matting_solid": "Сплошная матировка",
+            "matting_stripes": "Матовые полосы",
+            "matting_logo": "Матовый рисунок",
+        }
+        mat_name = matting_names.get(details.get("matting", ""), "Матировка")
+        lines.append(f"{mat_name}: +{matting_price} $")
+
+    pattern_price = details.get("complex_pattern_price", 0)
+    if pattern_price:
+        lines.append(f"Сложный рисунок: +{pattern_price} $")
+
+    frame_surcharge = details.get("frame_surcharge", 0)
+    if frame_surcharge:
+        lines.append(f"Наценка за цвет рамки: +{frame_surcharge} $")
+
+    handle_price = details.get("handle_price", 0)
+    if handle_price:
+        lines.append(f"Дверная ручка: +{handle_price} $")
+
+    discount = details.get("volume_discount", 0)
+    if discount:
+        lines.append(f"Скидка за объём (>8 м²): -{discount} $")
+
+    lines.append("")
+    lines.append(f"<b>Итого: {price.get('total_price')} {price.get('currency', 'USD')}</b>")
+
+    caption = "\n".join(lines)
+
+    if len(paths) == 1:
+        await sender.send_photo(settings.telegram_bot_token, job.chat_id, paths[0], caption=caption)
+    else:
+        await sender.send_media_group(settings.telegram_bot_token, job.chat_id, paths, caption=caption)
+    await sender.send_message(
+        settings.telegram_bot_token,
+        job.chat_id,
+        "Оцените, пожалуйста, рендер:",
+        reply_markup=rate_render_keyboard(order.get("request_id", "")),
+    )
+```
+
+### Task 4: Build & deploy
+
+After tasks 1-3:
+
+```bash
+cd mini-app && npm run build
+```
+
+### Task 5: Update tests
+
+Add or update test in `tests/test_worker.py` (or a new file) verifying that `_send_render_result` produces the expected detailed caption. Mock the sender and check that `send_photo` is called with a caption containing "Тип:", "Площадь:", "Базовая ставка:", "Итого:".
+
+### Files to modify:
+- [ ] `mini-app/src/styles/app.css` — add `.pricing-section-hint` class
+- [ ] `mini-app/src/components/PriceTable.tsx` — ALREADY DONE, just verify it compiles
+- [ ] `src/queue/worker.py` — rewrite `_send_render_result` with detailed caption
+- [ ] `tests/test_worker.py` or new test file — test detailed caption
+
+### Single commit message:
+`"feat: CMS pricing polish (Russian labels, units) + detailed price breakdown in client render caption"`
+
+---
+
 ## COMMIT ORDER (FINAL)
 
 1. ✅ Phase 4: Mini App UI redesign
 2. ✅ Phase 5: Architecture visualization site
 3. ✅ Phase 6: Reliability hardening
 4. ✅ Phase 7: Vulnerability visualization tab
-5. Phase 8: Database-driven pricing & materials
+5. ✅ Phase 8: Database-driven pricing & materials
+6. Phase 9: CMS polish + detailed price breakdown
 
 ---
 
