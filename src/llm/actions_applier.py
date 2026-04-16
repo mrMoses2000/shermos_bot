@@ -153,7 +153,8 @@ async def apply_actions(
                     f"Телефон: {params.phone}\n"
                     f"Адрес: {params.address or '—'}\n"
                     f"Время: <b>{m_time}</b>\n"
-                    f"Замер: <code>#{m_id}</code>"
+                    f"Замер: <code>#{m_id}</code>\n\n"
+                    "Если не подтвердить и не отклонить за 15 минут, замер подтвердится автоматически."
                 ),
                 reply_markup=manager_measurement_keyboard(m_id),
             )

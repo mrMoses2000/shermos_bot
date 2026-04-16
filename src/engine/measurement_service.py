@@ -2,7 +2,7 @@
 
 All data lives in PostgreSQL. Handles:
 - Time validation (business hours, 15-min alignment, not in past)
-- Conflict detection (no overlapping active measurements)
+- Conflict detection (active measurement starts must be at least 45 minutes apart)
 - Available slots query (for Gemini prompt context)
 - Full status lifecycle: scheduled → confirmed/rejected/cancelled/completed
 - Manager and client notifications via Telegram
@@ -10,6 +10,7 @@ All data lives in PostgreSQL. Handles:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -20,11 +21,13 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 # Business hours
-OPENING_HOUR, OPENING_MINUTE = 9, 30
-CLOSING_HOUR, CLOSING_MINUTE = 21, 0
-DEFAULT_DURATION_MINUTES = 60
+OPENING_HOUR, OPENING_MINUTE = 9, 0
+CLOSING_HOUR, CLOSING_MINUTE = 19, 0
+DEFAULT_DURATION_MINUTES = 45
 MAX_DAYS_AHEAD = 14
-SLOT_STEP_MINUTES = 30
+SLOT_STEP_MINUTES = 15
+MIN_START_GAP_MINUTES = 45
+MANAGER_CONFIRM_TIMEOUT_MINUTES = 15
 
 VALID_STATUSES = {"scheduled", "confirmed", "rejected", "cancelled", "completed", "rescheduled"}
 ACTIVE_STATUSES = {"scheduled", "confirmed"}
@@ -44,6 +47,9 @@ def validate_time(date: str, time: str, timezone: str) -> datetime:
     if start.minute % 15 != 0:
         raise ValueError("Время замера должно быть кратно 15 минутам (например 10:00, 10:15, 10:30)")
 
+    if start.weekday() == 6:
+        raise ValueError("В воскресенье замеры не проводятся")
+
     opening = start.replace(hour=OPENING_HOUR, minute=OPENING_MINUTE, second=0)
     closing = start.replace(hour=CLOSING_HOUR, minute=CLOSING_MINUTE, second=0)
     if start < opening or start > closing:
@@ -60,22 +66,21 @@ def validate_time(date: str, time: str, timezone: str) -> datetime:
 
 
 async def check_conflict(pool, start: datetime, duration_minutes: int = DEFAULT_DURATION_MINUTES) -> dict | None:
-    """Check if the requested time slot conflicts with an existing active measurement.
+    """Check if requested start is too close to an existing active measurement.
 
     Returns the conflicting measurement dict, or None if slot is free.
     """
-    end = start + timedelta(minutes=duration_minutes)
     row = await pool.fetchrow(
         """
         SELECT id, scheduled_time, duration_minutes, client_name, status
         FROM measurements
         WHERE status IN ('scheduled', 'confirmed')
-          AND scheduled_time < $2
-          AND (scheduled_time + (duration_minutes || ' minutes')::interval) > $1
+          AND scheduled_time > $1 - ($2 || ' minutes')::interval
+          AND scheduled_time < $1 + ($2 || ' minutes')::interval
         LIMIT 1
         """,
         start,
-        end,
+        MIN_START_GAP_MINUTES,
     )
     return dict(row) if row else None
 
@@ -91,9 +96,10 @@ async def get_available_slots(
     Used in Gemini prompt context so the model can suggest free times.
     """
     tz = ZoneInfo(timezone)
-    day_start = datetime.strptime(date, "%Y-%m-%d").replace(
-        hour=OPENING_HOUR, minute=OPENING_MINUTE, second=0, tzinfo=tz
-    )
+    day = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=tz)
+    if day.weekday() == 6:
+        return []
+    day_start = day.replace(hour=OPENING_HOUR, minute=OPENING_MINUTE, second=0)
     day_end = day_start.replace(hour=CLOSING_HOUR, minute=CLOSING_MINUTE)
     now = datetime.now(tz)
 
@@ -108,19 +114,15 @@ async def get_available_slots(
         """,
         day_start,
     )
-    busy_ranges = [
-        (row["scheduled_time"], row["scheduled_time"] + timedelta(minutes=row["duration_minutes"]))
-        for row in rows
-    ]
+    busy_starts = [row["scheduled_time"] for row in rows]
 
     slots = []
     current = day_start
-    while current + timedelta(minutes=duration_minutes) <= day_end:
+    while current <= day_end:
         if current > now:  # Don't show past slots
-            slot_end = current + timedelta(minutes=duration_minutes)
             is_free = all(
-                slot_end <= busy_start or current >= busy_end
-                for busy_start, busy_end in busy_ranges
+                abs((current - busy_start).total_seconds()) >= MIN_START_GAP_MINUTES * 60
+                for busy_start in busy_starts
             )
             if is_free:
                 slots.append(current.strftime("%H:%M"))
@@ -141,6 +143,9 @@ async def schedule_measurement(
     duration_minutes: int = DEFAULT_DURATION_MINUTES,
 ) -> dict[str, Any]:
     """Create a new measurement. Raises ValueError on conflict or invalid time."""
+    if not address or not address.strip():
+        raise ValueError("Для записи на замер нужен адрес, куда ехать мастеру")
+
     start = validate_time(date, time, timezone)
 
     conflict = await check_conflict(pool, start, duration_minutes)
@@ -154,8 +159,8 @@ async def schedule_measurement(
     row = await pool.fetchrow(
         """
         INSERT INTO measurements
-            (client_chat_id, scheduled_time, duration_minutes, address, client_name, client_phone, notes, status)
-        VALUES ($1, $2, $3, $4, $5, $6, '', 'scheduled')
+            (client_chat_id, scheduled_time, duration_minutes, address, client_name, client_phone, notes, status, auto_confirm_at)
+        VALUES ($1, $2, $3, $4, $5, $6, '', 'scheduled', now() + ($7 || ' minutes')::interval)
         RETURNING *
         """,
         chat_id,
@@ -164,6 +169,7 @@ async def schedule_measurement(
         address or "",
         client_name,
         phone,
+        MANAGER_CONFIRM_TIMEOUT_MINUTES,
     )
     measurement = dict(row)
     logger.info("measurement_created", extra={"id": measurement["id"], "chat_id": chat_id, "time": start.isoformat()})
@@ -204,6 +210,96 @@ async def update_measurement_status(
     )
     logger.info("measurement_status_changed", extra={"id": measurement_id, "from": current_status, "to": new_status})
     return dict(row)
+
+
+async def auto_confirm_due_measurements(pool) -> list[dict[str, Any]]:
+    """Auto-confirm measurements that stayed scheduled past the manager decision deadline."""
+    rows = await pool.fetch(
+        """
+        UPDATE measurements
+        SET status='confirmed',
+            reason=COALESCE(NULLIF(reason, ''), 'Автоподтверждение: менеджер не ответил за 15 минут'),
+            updated_at=now()
+        WHERE status='scheduled'
+          AND COALESCE(auto_confirm_at, created_at + interval '15 minutes') <= now()
+        RETURNING *
+        """
+    )
+    confirmed = [dict(row) for row in rows]
+    if confirmed:
+        logger.info("measurements_auto_confirmed", extra={"count": len(confirmed)})
+    return confirmed
+
+
+async def upsert_measurement_slot(
+    pool,
+    date: str,
+    time: str,
+    timezone: str,
+    manager_chat_id: int | None = None,
+    duration_minutes: int = DEFAULT_DURATION_MINUTES,
+    source: str = "manager",
+) -> dict[str, Any]:
+    """Store a manager-proposed open slot for calendar/audit purposes."""
+    slot_start = validate_time(date, time, timezone)
+    conflict = await check_conflict(pool, slot_start, duration_minutes)
+    if conflict:
+        conflict_time = conflict["scheduled_time"].strftime("%H:%M")
+        raise ValueError(f"На {conflict_time} уже есть активный замер рядом с этим временем")
+    row = await pool.fetchrow(
+        """
+        INSERT INTO measurement_slots (slot_start, duration_minutes, source, manager_chat_id, status)
+        VALUES ($1, $2, $3, $4, 'open')
+        ON CONFLICT (slot_start) DO UPDATE
+        SET duration_minutes=EXCLUDED.duration_minutes,
+            source=EXCLUDED.source,
+            manager_chat_id=COALESCE(EXCLUDED.manager_chat_id, measurement_slots.manager_chat_id),
+            status='open',
+            updated_at=now()
+        RETURNING *
+        """,
+        slot_start,
+        duration_minutes,
+        source,
+        manager_chat_id,
+    )
+    return dict(row)
+
+
+def parse_slot_proposal(text: str, timezone: str, now: datetime | None = None) -> tuple[str, str] | None:
+    """Parse simple manager messages like 'завтра на 11:00' into (YYYY-MM-DD, HH:MM)."""
+    tz = ZoneInfo(timezone)
+    base = now.astimezone(tz) if now else datetime.now(tz)
+    lowered = (text or "").strip().lower()
+    time_matches = list(re.finditer(r"\b([01]?\d|2[0-3])(?::([0-5]\d))?\b", lowered))
+    if not time_matches:
+        return None
+    time_match = time_matches[-1]
+    hour = int(time_match.group(1))
+    minute = int(time_match.group(2) or "00")
+
+    if "послезавтра" in lowered:
+        date_value = (base + timedelta(days=2)).date()
+    elif "завтра" in lowered:
+        date_value = (base + timedelta(days=1)).date()
+    elif "сегодня" in lowered:
+        date_value = base.date()
+    else:
+        iso_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", lowered)
+        dot_match = re.search(r"\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b", lowered)
+        if iso_match:
+            date_value = datetime.strptime(iso_match.group(1), "%Y-%m-%d").date()
+        elif dot_match:
+            day = int(dot_match.group(1))
+            month = int(dot_match.group(2))
+            year_raw = dot_match.group(3)
+            year = base.year if not year_raw else int(year_raw)
+            if year < 100:
+                year += 2000
+            date_value = datetime(year, month, day, tzinfo=tz).date()
+        else:
+            return None
+    return date_value.strftime("%Y-%m-%d"), f"{hour:02d}:{minute:02d}"
 
 
 async def get_measurements_for_date(pool, date: str, timezone: str) -> list[dict]:

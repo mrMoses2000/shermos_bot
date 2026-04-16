@@ -26,7 +26,10 @@ class FakePool:
 
 
 def _future_date(days=1) -> str:
-    return (datetime.now(ZoneInfo(TZ)) + timedelta(days=days)).strftime("%Y-%m-%d")
+    candidate = datetime.now(ZoneInfo(TZ)) + timedelta(days=days)
+    if candidate.weekday() == 6:
+        candidate += timedelta(days=1)
+    return candidate.strftime("%Y-%m-%d")
 
 
 def test_validate_time_rejects_past():
@@ -40,7 +43,7 @@ def test_validate_time_rejects_outside_hours():
     future = _future_date()
 
     with pytest.raises(ValueError, match="доступны"):
-        measurement_service.validate_time(future, "09:00", TZ)
+        measurement_service.validate_time(future, "08:45", TZ)
     with pytest.raises(ValueError, match="доступны"):
         measurement_service.validate_time(future, "21:15", TZ)
 
@@ -56,6 +59,15 @@ def test_validate_time_accepts_valid():
     assert result.hour == 10
     assert result.minute == 15
     assert result.tzinfo is not None
+
+
+def test_validate_time_rejects_sunday():
+    now = datetime.now(ZoneInfo(TZ))
+    days_until_sunday = (6 - now.weekday()) % 7 or 7
+    sunday = (now + timedelta(days=days_until_sunday)).strftime("%Y-%m-%d")
+
+    with pytest.raises(ValueError, match="воскресенье"):
+        measurement_service.validate_time(sunday, "10:00", TZ)
 
 
 @pytest.mark.asyncio
@@ -95,11 +107,11 @@ async def test_get_available_slots_excludes_busy():
 
     slots = await measurement_service.get_available_slots(pool, future, TZ)
 
-    assert "09:30" in slots
+    assert "09:00" in slots
+    assert "09:45" in slots
     assert "10:00" not in slots
     assert "10:30" not in slots
-    assert "11:00" not in slots
-    assert "11:30" in slots
+    assert "11:15" in slots
 
 
 @pytest.mark.asyncio
@@ -117,6 +129,21 @@ async def test_schedule_measurement_raises_on_conflict():
             client_name="Петр",
             phone="+996",
             address="Адрес",
+            timezone=TZ,
+        )
+
+
+@pytest.mark.asyncio
+async def test_schedule_measurement_requires_address():
+    with pytest.raises(ValueError, match="адрес"):
+        await measurement_service.schedule_measurement(
+            FakePool(),
+            chat_id=10,
+            date=_future_date(),
+            time="10:15",
+            client_name="Петр",
+            phone="+996",
+            address="",
             timezone=TZ,
         )
 
@@ -155,6 +182,7 @@ async def test_schedule_measurement_creates_record():
     assert measurement["id"] == 7
     assert measurement["client_chat_id"] == 10
     assert len(pool.fetchrow_calls) == 2
+    assert pool.fetchrow_calls[1][1][-1] == measurement_service.MANAGER_CONFIRM_TIMEOUT_MINUTES
 
 
 @pytest.mark.asyncio
@@ -182,3 +210,33 @@ async def test_update_status_rejects_unknown_status():
 
     with pytest.raises(ValueError, match="Неизвестный статус"):
         await measurement_service.update_measurement_status(pool, 1, "banana")
+
+
+@pytest.mark.asyncio
+async def test_auto_confirm_due_measurements_updates_scheduled_rows():
+    scheduled_time = measurement_service.validate_time(_future_date(), "10:15", TZ)
+    pool = FakePool(fetch_results=[[{"id": 1, "status": "confirmed", "scheduled_time": scheduled_time}]])
+
+    rows = await measurement_service.auto_confirm_due_measurements(pool)
+
+    assert rows[0]["id"] == 1
+    assert "auto_confirm_at" in pool.fetch_calls[0][0]
+
+
+@pytest.mark.asyncio
+async def test_upsert_measurement_slot_stores_manager_open_slot():
+    future = _future_date()
+    slot_start = measurement_service.validate_time(future, "11:00", TZ)
+    pool = FakePool(fetchrow_results=[None, {"id": 4, "slot_start": slot_start, "status": "open"}])
+
+    slot = await measurement_service.upsert_measurement_slot(pool, future, "11:00", TZ, manager_chat_id=99)
+
+    assert slot["id"] == 4
+    assert "measurement_slots" in pool.fetchrow_calls[1][0]
+
+
+def test_parse_slot_proposal_understands_manager_text():
+    base = datetime(2026, 4, 16, 10, 0, tzinfo=ZoneInfo(TZ))
+
+    assert measurement_service.parse_slot_proposal("завтра на 11:00", TZ, now=base) == ("2026-04-17", "11:00")
+    assert measurement_service.parse_slot_proposal("20.04 15:30", TZ, now=base) == ("2026-04-20", "15:30")

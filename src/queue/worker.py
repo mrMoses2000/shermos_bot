@@ -298,19 +298,62 @@ async def _handle_measurement_callback(
             pg_pool, meas_id, new_status, manager_chat_id=job.chat_id
         )
     except ValueError as exc:
-        await _send_and_record(
-            pg_pool, sender, settings.manager_bot_token, job.chat_id,
-            f"Ошибка: {exc}", bot_type="manager",
-        )
-        return
+        if action == "meas_reject":
+            current = await pool_fetchrow_safe(pg_pool, meas_id)
+            if current and current.get("status") == "confirmed":
+                try:
+                    measurement = await update_measurement_status(
+                        pg_pool,
+                        meas_id,
+                        "cancelled",
+                        manager_chat_id=job.chat_id,
+                        reason="Мастер отменил ранее подтверждённый замер",
+                    )
+                    new_status = "cancelled"
+                except ValueError as cancel_exc:
+                    await _send_and_record(
+                        pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                        f"Ошибка: {cancel_exc}", bot_type="manager",
+                    )
+                    return
+            else:
+                await _send_and_record(
+                    pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                    f"Ошибка: {exc}", bot_type="manager",
+                )
+                return
+        else:
+            await _send_and_record(
+                pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                f"Ошибка: {exc}", bot_type="manager",
+            )
+            return
 
     m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
-    status_text = "подтверждён" if new_status == "confirmed" else "отклонён"
+    status_text = {
+        "confirmed": "подтверждён",
+        "rejected": "отклонён",
+        "cancelled": "отменён",
+    }.get(new_status, new_status)
 
     # Notify manager
+    manager_text = f"Замер #{meas_id} ({m_time}) — <b>{status_text}</b>."
+    if new_status in {"rejected", "cancelled"}:
+        await postgres.upsert_conversation_state(
+            pg_pool,
+            job.chat_id,
+            "scheduling",
+            f"measurement_alt:{meas_id}",
+            {"measurement_id": meas_id},
+        )
+        manager_text += (
+            "\n\nНапишите удобный день и время, например: <b>завтра 11:00</b>. "
+            "Я сохраню это как открытый слот для замеров."
+        )
+
     await _send_and_record(
         pg_pool, sender, settings.manager_bot_token, job.chat_id,
-        f"Замер #{meas_id} ({m_time}) — <b>{status_text}</b>.",
+        manager_text,
         bot_type="manager",
     )
 
@@ -327,13 +370,100 @@ async def _handle_measurement_callback(
     else:
         client_msg = (
             f"К сожалению, замер на <b>{m_time}</b> не может быть проведён.\n\n"
-            f"Напишите нам, чтобы выбрать другое время."
+            f"Пожалуйста, выберите другое время для записи."
         )
 
     await _send_and_record(
         pg_pool, sender, settings.telegram_bot_token, client_chat_id,
         client_msg, bot_type="client",
     )
+
+
+async def _handle_manager_slot_proposal(
+    text: str,
+    job: Job,
+    pg_pool,
+    sender: TelegramSender,
+) -> bool:
+    """Handle manager free-text alternative slot after rejecting/cancelling a measurement."""
+    from src.engine.measurement_service import parse_slot_proposal, upsert_measurement_slot
+
+    parsed = parse_slot_proposal(text, settings.timezone)
+    if not parsed:
+        return False
+
+    state = await postgres.get_conversation_state(pg_pool, job.chat_id)
+    if not state or state.get("mode") != "scheduling" or not str(state.get("step") or "").startswith("measurement_alt:"):
+        return False
+
+    date, time = parsed
+    try:
+        slot = await upsert_measurement_slot(
+            pg_pool,
+            date,
+            time,
+            settings.timezone,
+            manager_chat_id=job.chat_id,
+        )
+    except ValueError as exc:
+        await _send_and_record(
+            pg_pool, sender, settings.manager_bot_token, job.chat_id,
+            f"Не могу сохранить слот: {exc}",
+            bot_type="manager",
+        )
+        return True
+
+    await postgres.upsert_conversation_state(pg_pool, job.chat_id, "idle", None, {})
+    slot_time = slot["slot_start"].strftime("%d.%m.%Y %H:%M")
+    await _send_and_record(
+        pg_pool, sender, settings.manager_bot_token, job.chat_id,
+        f"Открытый слот сохранён: <b>{slot_time}</b>.",
+        bot_type="manager",
+    )
+    return True
+
+
+async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, measurements: list[dict]) -> None:
+    for measurement in measurements:
+        m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+        await _send_and_record(
+            pg_pool,
+            sender,
+            settings.telegram_bot_token,
+            measurement["client_chat_id"],
+            (
+                "<b>Ваш замер автоматически подтверждён.</b>\n\n"
+                f"Дата: <b>{m_time}</b>\n"
+                f"Адрес: {measurement.get('address', '—')}\n\n"
+                "Мастер не отклонил запись в течение 15 минут, поэтому время закреплено."
+            ),
+            bot_type="client",
+        )
+        for manager_chat_id in settings.manager_chat_ids_list:
+            await _send_and_record(
+                pg_pool,
+                sender,
+                settings.manager_bot_token,
+                manager_chat_id,
+                f"Замер #{measurement['id']} на <b>{m_time}</b> автоматически подтверждён.",
+                bot_type="manager",
+                reply_markup=manager_measurement_keyboard(int(measurement["id"])),
+            )
+
+
+async def _measurement_auto_confirm_loop(pg_pool, sender: TelegramSender, interval_seconds: int = 60) -> None:
+    from src.engine.measurement_service import auto_confirm_due_measurements
+
+    while True:
+        try:
+            measurements = await auto_confirm_due_measurements(pg_pool)
+            if measurements:
+                await _notify_auto_confirmed_measurements(pg_pool, sender, measurements)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("measurement_auto_confirm_error", extra={"error": str(exc)})
+        await asyncio.sleep(interval_seconds)
 
 
 async def process_manager_job(
@@ -399,6 +529,8 @@ async def process_manager_job(
                 "\n".join(lines) if measurements else "Замеров пока нет.",
                 bot_type="manager",
             )
+        elif await _handle_manager_slot_proposal(text, job, pg_pool, sender):
+            pass
         else:
             await _send_and_record(
                 pg_pool,
@@ -465,6 +597,7 @@ async def run_worker() -> None:
         asyncio.create_task(_manager_loop(pg_pool, redis_client, telegram_sender)),
         asyncio.create_task(run_outbox_dispatcher(pg_pool, telegram_sender)),
         asyncio.create_task(run_gemini_health_check()),
+        asyncio.create_task(_measurement_auto_confirm_loop(pg_pool, telegram_sender)),
     ]
     try:
         await asyncio.gather(*tasks)

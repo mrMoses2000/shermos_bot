@@ -60,7 +60,7 @@ class ScheduleMeasurementAction(BaseModel):
     time: str
     client_name: str
     phone: str
-    address: str = ""
+    address: str = Field(min_length=1)
 
 
 class UpdateClientProfileAction(BaseModel):

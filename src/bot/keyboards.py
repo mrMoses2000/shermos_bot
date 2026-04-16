@@ -57,7 +57,7 @@ def manager_measurement_keyboard(measurement_id: int) -> dict:
         [
             [
                 {"text": "Подтвердить", "callback_data": f"meas_confirm:{mid}"},
-                {"text": "Отклонить", "callback_data": f"meas_reject:{mid}"},
+                {"text": "Отклонить / отменить", "callback_data": f"meas_reject:{mid}"},
             ],
             [
                 {"text": "Позвонить клиенту", "callback_data": f"meas_call:{mid}"},

@@ -36,3 +36,12 @@ def test_order_drafts_migration_links_active_collection_to_final_order():
     assert "REFERENCES orders(request_id)" in sql
     assert "idx_order_drafts_one_active_per_chat" in sql
     assert "jsonb_typeof(collected_params) = 'object'" in sql
+
+
+def test_measurement_scheduling_rules_migration_adds_auto_confirm_and_slots():
+    sql = Path("migrations/016_measurement_scheduling_rules.sql").read_text(encoding="utf-8")
+
+    assert "auto_confirm_at" in sql
+    assert "ALTER COLUMN duration_minutes SET DEFAULT 45" in sql
+    assert "CREATE TABLE IF NOT EXISTS measurement_slots" in sql
+    assert "idx_measurement_slots_open_time" in sql
