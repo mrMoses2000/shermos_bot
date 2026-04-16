@@ -480,8 +480,8 @@ fi
 echo ""
 echo -n "  Telegram webhook status: "
 INFO=$(curl -s "https://api.telegram.org/bot${CLIENT_TOKEN}/getWebhookInfo")
-PENDING=$(echo "$INFO" | grep -o '"pending_update_count":[0-9]*' | cut -d: -f2)
-HAS_ERROR=$(echo "$INFO" | grep -o '"last_error_message":"[^"]*"' | cut -d'"' -f4)
+PENDING=$(echo "$INFO" | grep -o '"pending_update_count":[0-9]*' | cut -d: -f2 || true)
+HAS_ERROR=$(echo "$INFO" | grep -o '"last_error_message":"[^"]*"' | cut -d'"' -f4 || true)
 
 if [ -n "$HAS_ERROR" ] && [ "$HAS_ERROR" != "" ]; then
     warn "Telegram reports error: $HAS_ERROR"

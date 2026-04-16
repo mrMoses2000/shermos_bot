@@ -67,7 +67,10 @@ async def run_migrations(pool: asyncpg.Pool, migrations_dir: str = "migrations/"
                 continue
             async with conn.transaction():
                 await conn.execute(sql_file.read_text(encoding="utf-8"))
-                await conn.execute("INSERT INTO _migrations(filename) VALUES ($1)", sql_file.name)
+                await conn.execute(
+                    "INSERT INTO _migrations(filename) VALUES ($1) ON CONFLICT DO NOTHING",
+                    sql_file.name,
+                )
 
 
 async def mark_update_received(pool, update_id: int) -> bool:
