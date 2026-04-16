@@ -81,6 +81,26 @@ MATTING_ALIASES = {
     "matting_logo": "matting_logo",
 }
 
+WALL_ALIASES = {
+    "front": "front",
+    "main": "front",
+    "основная": "front",
+    "основной": "front",
+    "центральная": "front",
+    "передняя": "front",
+    "side": "side",
+    "боковая": "side",
+    "боковой": "side",
+    "left": "left",
+    "слева": "left",
+    "левая": "left",
+    "левой": "left",
+    "right": "right",
+    "справа": "right",
+    "правая": "right",
+    "правой": "right",
+}
+
 
 def normalize_shape(value: str | None) -> str:
     if not value:
@@ -117,6 +137,13 @@ def normalize_matting(value: str | None) -> str:
     return MATTING_ALIASES.get(stripped.lower(), stripped)
 
 
+def normalize_wall(value: str | None) -> str | None:
+    if not value:
+        return None
+    stripped = value.strip()
+    return WALL_ALIASES.get(stripped.lower(), stripped.lower())
+
+
 def normalize_render_params(params: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(params)
     normalized["shape"] = normalize_shape(normalized.get("shape"))
@@ -125,6 +152,10 @@ def normalize_render_params(params: dict[str, Any]) -> dict[str, Any]:
     normalized["handle_position"] = normalize_handle_position(normalized.get("handle_position"))
     normalized["partition_type"] = normalize_partition_type(normalized.get("partition_type"))
     normalized["matting"] = normalize_matting(normalized.get("matting"))
+    if "handle_wall" in normalized:
+        normalized["handle_wall"] = normalize_wall(normalized.get("handle_wall"))
+    if "door_wall" in normalized:
+        normalized["door_wall"] = normalize_wall(normalized.get("door_wall"))
     normalized["glass_type"] = str(normalized.get("glass_type") or "1")
     normalized["frame_color"] = str(normalized.get("frame_color") or "1")
     if normalized.get("width_b") in ("", 0):

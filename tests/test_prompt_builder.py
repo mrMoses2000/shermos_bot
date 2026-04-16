@@ -37,6 +37,7 @@ def test_missing_params_section_when_complete():
                 "glass_type": "1",
                 "frame_color": "1",
                 "matting": "none",
+                "add_handle": False,
                 "rows": 1,
                 "cols": 2,
             }

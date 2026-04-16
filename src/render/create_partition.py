@@ -426,6 +426,24 @@ def _select_wall_param(params, base_key, wall_name, shape_side):
     return params.get(base_key)
 
 
+def _select_wall_int(params, base_key, wall_name, shape_side, default_value):
+    value = _select_wall_param(params, base_key, wall_name, shape_side)
+    if value is None:
+        value = default_value
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default_value)
+    return max(1, parsed)
+
+
+def _wall_grid(params, wall_name, shape_side, default_rows, default_cols):
+    return (
+        _select_wall_int(params, 'rows', wall_name, shape_side, default_rows),
+        _select_wall_int(params, 'cols', wall_name, shape_side, default_cols),
+    )
+
+
 def _matches_handle_wall(handle_wall, wall_name, shape_side):
     if not handle_wall:
         return wall_name == 'front'
@@ -438,7 +456,7 @@ def _matches_handle_wall(handle_wall, wall_name, shape_side):
     return handle_wall == wall_name
 
 
-def _create_handles_for_wall(params, width, height, frame_thickness, vertical_mullions):
+def _create_handles_for_wall(params, width, height, frame_thickness, vertical_mullions, cols):
     handle_style = params.get('handle_style', 'Современный')
     handle_position = params.get('handle_position', 'Лево')
     handle_door = params.get('handle_door', 'Основная дверь')
@@ -449,7 +467,7 @@ def _create_handles_for_wall(params, width, height, frame_thickness, vertical_mu
         if normalized_positions:
             x_segments = _segments_from_mullions(width, frame_thickness, normalized_positions)
         else:
-            x_segments = _segments_from_cols(width, frame_thickness, int(params.get('cols', 1)))
+            x_segments = _segments_from_cols(width, frame_thickness, int(cols or 1))
         handle_parts = []
         for section_index in handle_sections:
             if 1 <= section_index <= len(x_segments):
@@ -503,37 +521,40 @@ def create_partition_mesh(params):
     if shape == 'Прямая':
         # Default width if missing
         W_A = float(params.get('width_a', 2.0))
+        R_FRONT, C_FRONT = _wall_grid(params, 'front', shape_side, R, C)
         vm = _select_wall_param(params, 'vertical_mullions', 'front', shape_side)
         hm = _select_wall_param(params, 'horizontal_mullions', 'front', shape_side)
         door_sections_front = door_sections if _matches_handle_wall(door_wall, 'front', shape_side) else None
-        frame, glass = _create_wall_segment(W_A, H, R, C, FT, vm, hm, door_sections_front)
+        frame, glass = _create_wall_segment(W_A, H, R_FRONT, C_FRONT, FT, vm, hm, door_sections_front)
         all_frame_parts.extend(frame)
         all_glass_panes.extend(glass)
         if add_handle and _matches_handle_wall(handle_wall, 'front', shape_side):
-            all_handle_parts.extend(_create_handles_for_wall(params, W_A, H, FT, vm))
+            all_handle_parts.extend(_create_handles_for_wall(params, W_A, H, FT, vm, C_FRONT))
 
     elif shape == 'Г-образная':
         W_A = float(params.get('width_a', 2.0))
         W_B = float(params.get('width_b', 1.5))
         
         # Стена A (основная)
+        R_A, C_A = _wall_grid(params, 'front', shape_side, R, C)
         vm_a = _select_wall_param(params, 'vertical_mullions', 'front', shape_side)
         hm_a = _select_wall_param(params, 'horizontal_mullions', 'front', shape_side)
         door_sections_front = door_sections if _matches_handle_wall(door_wall, 'front', shape_side) else None
-        frame_a, glass_a = _create_wall_segment(W_A, H, R, C, FT, vm_a, hm_a, door_sections_front)
+        frame_a, glass_a = _create_wall_segment(W_A, H, R_A, C_A, FT, vm_a, hm_a, door_sections_front)
         all_frame_parts.extend(frame_a)
         all_glass_panes.extend(glass_a)
         if add_handle and _matches_handle_wall(handle_wall, 'front', shape_side):
-            all_handle_parts.extend(_create_handles_for_wall(params, W_A, H, FT, vm_a))
+            all_handle_parts.extend(_create_handles_for_wall(params, W_A, H, FT, vm_a, C_A))
         
         # Стена B (боковая)
+        R_B, C_B = _wall_grid(params, 'side', shape_side, R, C)
         vm_b = _select_wall_param(params, 'vertical_mullions', 'side', shape_side)
         hm_b = _select_wall_param(params, 'horizontal_mullions', 'side', shape_side)
         door_sections_side = door_sections if _matches_handle_wall(door_wall, 'side', shape_side) else None
-        frame_b, glass_b = _create_wall_segment(W_B, H, R, C, FT, vm_b, hm_b, door_sections_side)
+        frame_b, glass_b = _create_wall_segment(W_B, H, R_B, C_B, FT, vm_b, hm_b, door_sections_side)
         handle_b_parts = []
         if add_handle and _matches_handle_wall(handle_wall, 'side', shape_side):
-            handle_b_parts = _create_handles_for_wall(params, W_B, H, FT, vm_b)
+            handle_b_parts = _create_handles_for_wall(params, W_B, H, FT, vm_b, C_B)
         
         # Поворот на 90 градусов (вокруг Y), чтобы направить вдоль -Z
         rotation = trimesh.transformations.rotation_matrix(np.pi / 2, [0, 1, 0])
@@ -560,36 +581,32 @@ def create_partition_mesh(params):
             all_handle_parts.extend(handle_b_parts)
 
     elif shape == 'П-образная':
-        W_A = float(params.get('width_a', 1.5))
-        W_B = float(params.get('width_b', 2.0))
-        W_C = float(params.get('width_c', 1.5))
-        
-        rotation_angle = np.pi / 2
-        z_offset = FT
-        if shape_side == 'left':
-            rotation_angle = -np.pi / 2
-            z_offset = -FT
+        W_FRONT = float(params.get('width_a', 2.0))
+        W_LEFT = float(params.get('width_b', 1.5))
+        W_RIGHT = float(params.get('width_c', 1.5))
 
-        # Стена B (передняя/центральная) - основа координат
+        # Стена A (основная/центральная) - основа координат
+        R_FRONT, C_FRONT = _wall_grid(params, 'front', shape_side, R, C)
         vm_b = _select_wall_param(params, 'vertical_mullions', 'front', shape_side)
         hm_b = _select_wall_param(params, 'horizontal_mullions', 'front', shape_side)
         door_sections_front = door_sections if _matches_handle_wall(door_wall, 'front', shape_side) else None
-        frame_b, glass_b = _create_wall_segment(W_B, H, R, C, FT, vm_b, hm_b, door_sections_front)
+        frame_b, glass_b = _create_wall_segment(W_FRONT, H, R_FRONT, C_FRONT, FT, vm_b, hm_b, door_sections_front)
         all_frame_parts.extend(frame_b)
         all_glass_panes.extend(glass_b)
         if add_handle and _matches_handle_wall(handle_wall, 'front', shape_side):
-            all_handle_parts.extend(_create_handles_for_wall(params, W_B, H, FT, vm_b))
+            all_handle_parts.extend(_create_handles_for_wall(params, W_FRONT, H, FT, vm_b, C_FRONT))
 
-        # Стена A (левая)
+        # Стена B (левая боковая)
+        R_LEFT, C_LEFT = _wall_grid(params, 'left', shape_side, R, C)
         vm_a = _select_wall_param(params, 'vertical_mullions', 'left', shape_side)
         hm_a = _select_wall_param(params, 'horizontal_mullions', 'left', shape_side)
         door_sections_left = door_sections if _matches_handle_wall(door_wall, 'left', shape_side) else None
-        frame_a, glass_a = _create_wall_segment(W_A, H, R, C, FT, vm_a, hm_a, door_sections_left)
+        frame_a, glass_a = _create_wall_segment(W_LEFT, H, R_LEFT, C_LEFT, FT, vm_a, hm_a, door_sections_left)
         handle_a_parts = []
         if add_handle and _matches_handle_wall(handle_wall, 'left', shape_side):
-            handle_a_parts = _create_handles_for_wall(params, W_A, H, FT, vm_a)
-        rot_a = trimesh.transformations.rotation_matrix(rotation_angle, [0, 1, 0])
-        trans_a = trimesh.transformations.translation_matrix([0, 0, z_offset]) # Стыкуем слева
+            handle_a_parts = _create_handles_for_wall(params, W_LEFT, H, FT, vm_a, C_LEFT)
+        rot_a = trimesh.transformations.rotation_matrix(np.pi / 2, [0, 1, 0])
+        trans_a = trimesh.transformations.translation_matrix([0, 0, FT])
         for part in frame_a: 
             part.apply_transform(rot_a)
             part.apply_transform(trans_a) 
@@ -603,16 +620,17 @@ def create_partition_mesh(params):
             _apply_transform(handle_a_parts, trans_a)
             all_handle_parts.extend(handle_a_parts)
         
-        # Стена C (правая)
+        # Стена C (правая боковая)
+        R_RIGHT, C_RIGHT = _wall_grid(params, 'right', shape_side, R, C)
         vm_c = _select_wall_param(params, 'vertical_mullions', 'right', shape_side)
         hm_c = _select_wall_param(params, 'horizontal_mullions', 'right', shape_side)
         door_sections_right = door_sections if _matches_handle_wall(door_wall, 'right', shape_side) else None
-        frame_c, glass_c = _create_wall_segment(W_C, H, R, C, FT, vm_c, hm_c, door_sections_right)
+        frame_c, glass_c = _create_wall_segment(W_RIGHT, H, R_RIGHT, C_RIGHT, FT, vm_c, hm_c, door_sections_right)
         handle_c_parts = []
         if add_handle and _matches_handle_wall(handle_wall, 'right', shape_side):
-            handle_c_parts = _create_handles_for_wall(params, W_C, H, FT, vm_c)
-        rot_c = trimesh.transformations.rotation_matrix(rotation_angle, [0, 1, 0])
-        trans_c = trimesh.transformations.translation_matrix([W_B - FT, 0, z_offset]) # Стыкуем справа
+            handle_c_parts = _create_handles_for_wall(params, W_RIGHT, H, FT, vm_c, C_RIGHT)
+        rot_c = trimesh.transformations.rotation_matrix(np.pi / 2, [0, 1, 0])
+        trans_c = trimesh.transformations.translation_matrix([W_FRONT - FT, 0, FT])
         for part in frame_c: 
             part.apply_transform(rot_c)
             part.apply_transform(trans_c)
@@ -705,16 +723,21 @@ def render_scene(frame_mesh, glass_mesh, params, handle_mesh=None, y_rotation_de
     if handle_mesh is not None:
         scene.add(pyrender.Mesh.from_trimesh(handle_mesh, material=handle_material))
 
-    # Настройка камеры
+    # Настройка камеры. Для технической визуализации используем orthographic,
+    # чтобы расстояние между секциями не менялось от ракурса к ракурсу.
+    aspect_ratio = float(IMG_WIDTH) / IMG_HEIGHT
     max_extent = np.max(frame_mesh.extents)
-    
-    current_shape = params.get('shape', 'Прямая')
-    is_complex_shape = current_shape != 'Прямая'
-    
-    zoom_factor = 2.5 if is_complex_shape else 1.8 # Увеличим отступ для сложных форм
-    camera_distance = max_extent * zoom_factor
+    horizontal_diag = float(np.linalg.norm(frame_mesh.extents[[0, 2]]))
+    view_half_width = max(horizontal_diag * 0.62, 1.0)
+    view_half_height = max(float(frame_mesh.extents[1]) * 0.62, view_half_width / aspect_ratio, 1.0)
+    camera_distance = max(max_extent * 3.0, 4.0)
 
-    camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0, aspectRatio=float(IMG_WIDTH)/IMG_HEIGHT)
+    camera = pyrender.OrthographicCamera(
+        xmag=view_half_width,
+        ymag=view_half_height,
+        znear=0.05,
+        zfar=1000.0,
+    )
 
     # Углы для камеры
     y_rot_angle = np.radians(y_rotation_deg)

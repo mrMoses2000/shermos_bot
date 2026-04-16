@@ -125,9 +125,9 @@ class PartitionValidator:
                 return False, "Не указаны все размеры для П-образной формы"
             
             for w_raw, label in [
-                (width_a_raw, 'левой'),
-                (width_b_raw, 'центральной'),
-                (width_c_raw, 'правой'),
+                (width_a_raw, 'основной'),
+                (width_b_raw, 'левой боковой'),
+                (width_c_raw, 'правой боковой'),
             ]:
                 w = _parse_float(w_raw)
                 if w is None:
@@ -315,6 +315,14 @@ class PartitionValidator:
         valid, error = cls.validate_sections(rows, cols)
         if not valid:
             errors.append(error)
+
+        for wall in ('front', 'side', 'left', 'right'):
+            wall_rows = params.get(f'rows_{wall}')
+            wall_cols = params.get(f'cols_{wall}')
+            if wall_rows is not None or wall_cols is not None:
+                valid, error = cls.validate_sections(wall_rows or 1, wall_cols or 1)
+                if not valid:
+                    errors.append(f"Секции стены {wall}: {error}")
         
         # Валидация толщины рамы
         thickness = params.get('frame_thickness')

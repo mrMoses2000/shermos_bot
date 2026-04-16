@@ -109,6 +109,7 @@ async def test_apply_actions_render_creates_order_and_notifies_manager(monkeypat
                 "glass_type": "1",
                 "frame_color": "1",
                 "matting": "none",
+                "add_handle": False,
                 "rows": 1,
                 "cols": 2,
             }
@@ -145,6 +146,7 @@ async def test_apply_actions_blocks_render_until_required_fields(monkeypatch):
                 "glass_type": "1",
                 "frame_color": "1",
                 "matting": "none",
+                "add_handle": False,
                 "rows": 1,
                 "cols": 2,
             }

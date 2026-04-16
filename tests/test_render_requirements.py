@@ -8,6 +8,7 @@ def test_missing_render_params_does_not_accept_model_defaults_as_collected_data(
     assert "glass_type" in missing
     assert "frame_color" in missing
     assert "matting" in missing
+    assert "add_handle" in missing
 
 
 def test_missing_render_params_requires_l_shape_side():
@@ -21,6 +22,7 @@ def test_missing_render_params_requires_l_shape_side():
             "glass_type": "1",
             "frame_color": "1",
             "matting": "none",
+            "add_handle": False,
             "rows": 1,
             "cols": 2,
         }

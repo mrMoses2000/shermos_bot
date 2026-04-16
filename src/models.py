@@ -39,7 +39,19 @@ class RenderPartitionAction(BaseModel):
     add_handle: bool = False
     handle_style: str = "Современный"
     handle_position: str = "Право"
+    handle_wall: Optional[str] = None
+    handle_sections: Optional[list[int]] = None
+    door_wall: Optional[str] = None
+    door_sections: Optional[list[int]] = None
     door_section: Optional[int] = None
+    rows_front: Optional[int] = None
+    cols_front: Optional[int] = None
+    rows_side: Optional[int] = None
+    cols_side: Optional[int] = None
+    rows_left: Optional[int] = None
+    cols_left: Optional[int] = None
+    rows_right: Optional[int] = None
+    cols_right: Optional[int] = None
     mullion_positions: Optional[dict] = None
 
 
