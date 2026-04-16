@@ -185,6 +185,23 @@ class TelegramSender:
             {"callback_query_id": callback_query_id, "text": text},
         )
 
+    async def get_file(self, token: str, file_id: str) -> dict[str, Any]:
+        data = await self._post_json(token, "getFile", {"file_id": file_id})
+        result = data.get("result") or {}
+        if not result.get("file_path"):
+            raise RuntimeError(f"Telegram getFile returned no file_path for {file_id}")
+        return result
+
+    async def download_file(self, token: str, file_path: str) -> bytes:
+        url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+        session = self._require_session()
+        async with session.get(url) as response:
+            if response.status >= 400:
+                raise RuntimeError(
+                    f"Telegram file download failed ({response.status}) for {file_path}"
+                )
+            return await response.read()
+
 
 telegram_sender = TelegramSender()
 
@@ -223,3 +240,11 @@ async def set_chat_menu_button(*args, **kwargs):
 
 async def answer_callback_query(*args, **kwargs):
     return await telegram_sender.answer_callback_query(*args, **kwargs)
+
+
+async def get_file(*args, **kwargs):
+    return await telegram_sender.get_file(*args, **kwargs)
+
+
+async def download_file(*args, **kwargs):
+    return await telegram_sender.download_file(*args, **kwargs)

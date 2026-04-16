@@ -122,6 +122,88 @@ async def test_set_webhook_json_and_certificate(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_file_returns_file_info(monkeypatch):
+    sender = TelegramSender()
+
+    async def fake_post_json(token, method, payload):
+        assert method == "getFile"
+        assert payload == {"file_id": "abc"}
+        return {"ok": True, "result": {"file_path": "voice/file_1.oga", "file_size": 42}}
+
+    monkeypatch.setattr(sender, "_post_json", fake_post_json)
+    info = await sender.get_file("tok", "abc")
+    assert info["file_path"] == "voice/file_1.oga"
+
+
+@pytest.mark.asyncio
+async def test_get_file_raises_when_missing_path(monkeypatch):
+    sender = TelegramSender()
+
+    async def fake_post_json(token, method, payload):
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(sender, "_post_json", fake_post_json)
+    with pytest.raises(RuntimeError, match="getFile"):
+        await sender.get_file("tok", "abc")
+
+
+@pytest.mark.asyncio
+async def test_download_file_returns_bytes(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def read(self):
+            return b"OGG-BYTES"
+
+    class FakeSession:
+        closed = False
+
+        def get(self, url):
+            FakeSession.last_url = url
+            return FakeResponse()
+
+    sender = TelegramSender()
+    sender.session = FakeSession()
+
+    data = await sender.download_file("TOKEN", "voice/file_1.oga")
+    assert data == b"OGG-BYTES"
+    assert FakeSession.last_url == "https://api.telegram.org/file/botTOKEN/voice/file_1.oga"
+
+
+@pytest.mark.asyncio
+async def test_download_file_raises_on_http_error(monkeypatch):
+    class FakeResponse:
+        status = 404
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def read(self):
+            return b""
+
+    class FakeSession:
+        closed = False
+
+        def get(self, url):
+            return FakeResponse()
+
+    sender = TelegramSender()
+    sender.session = FakeSession()
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        await sender.download_file("TOKEN", "voice/missing.oga")
+
+
+@pytest.mark.asyncio
 async def test_post_json_raises_on_telegram_error(monkeypatch):
     class FakeResponse:
         status = 200

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from src.bot.keyboards import manager_measurement_keyboard, open_mini_app_keyboard, rate_render_keyboard
 from src.bot.telegram_sender import TelegramSender, telegram_sender
+from src.bot.transcribe import TranscriptionError, extract_voice_file_id, transcribe_voice
 from src.config import settings
 from src.db import postgres
 from src.db.redis_client import RedisClient
@@ -201,6 +202,77 @@ async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_
     )
 
 
+async def _resolve_voice_text(
+    job: Job,
+    pg_pool,
+    sender: TelegramSender,
+) -> bool:
+    """Download and transcribe a voice/audio message, mutating job.text in place.
+
+    Returns True when the job is ready to continue into the LLM pipeline,
+    False when the message was rejected (user already notified, update marked).
+    """
+    file_id = extract_voice_file_id(job.raw_update)
+    if not file_id:
+        await _send_and_record(
+            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            "Не удалось распознать голосовое сообщение. Отправьте, пожалуйста, текстом.",
+        )
+        await postgres.mark_update_status(pg_pool, job.update_id, "failed", "voice_no_file_id")
+        return False
+
+    if not settings.assemblyai_api_key:
+        await _send_and_record(
+            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            "Распознавание голосовых пока недоступно. Напишите, пожалуйста, текстом.",
+        )
+        await postgres.mark_update_status(pg_pool, job.update_id, "failed", "assemblyai_not_configured")
+        return False
+
+    try:
+        await sender.send_chat_action(settings.telegram_bot_token, job.chat_id, action="record_voice")
+        file_info = await sender.get_file(settings.telegram_bot_token, file_id)
+        audio_bytes = await sender.download_file(settings.telegram_bot_token, file_info["file_path"])
+        transcript = await transcribe_voice(audio_bytes)
+    except TranscriptionError as exc:
+        logger.warning("voice_transcription_failed", extra={"chat_id": job.chat_id, "error": str(exc)})
+        await _send_and_record(
+            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            "Не удалось распознать голосовое сообщение. Попробуйте ещё раз или напишите текстом.",
+        )
+        await postgres.mark_update_status(pg_pool, job.update_id, "failed", f"transcription: {exc}")
+        return False
+    except Exception as exc:
+        logger.exception(
+            "voice_download_failed", extra={"chat_id": job.chat_id, "error": str(exc)},
+        )
+        await _send_and_record(
+            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            "Не удалось получить голосовое сообщение. Попробуйте ещё раз.",
+        )
+        await postgres.mark_update_status(pg_pool, job.update_id, "failed", f"voice_download: {exc}")
+        return False
+
+    if not transcript:
+        await _send_and_record(
+            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            "Голосовое сообщение не распознано (тишина?). Попробуйте ещё раз.",
+        )
+        await postgres.mark_update_status(pg_pool, job.update_id, "failed", "empty_transcript")
+        return False
+
+    # Echo transcript back so the client can spot recognition errors.
+    await _send_and_record(
+        pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+        f"<i>Распознано:</i> {transcript}",
+    )
+
+    # Replace the job text: Pydantic models are frozen-ish, so update attr via __dict__.
+    job.text = transcript
+    job.msg_type = "text"
+    return True
+
+
 async def process_client_job(
     job: Job,
     pg_pool,
@@ -222,6 +294,11 @@ async def process_client_job(
         if job.msg_type == "command" and await _handle_client_command(job, pg_pool, sender):
             await postgres.mark_update_status(pg_pool, job.update_id, "completed")
             return
+
+        if job.msg_type == "voice":
+            ok = await _resolve_voice_text(job, pg_pool, sender)
+            if not ok:
+                return
 
         first_name, username = _telegram_user(job)
         client = await postgres.get_client_by_chat_id(pg_pool, job.chat_id)

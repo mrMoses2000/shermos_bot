@@ -46,6 +46,10 @@ class Settings(BaseSettings):
 
     mini_app_url: str = ""
 
+    assemblyai_api_key: str = ""
+    transcription_language: str = "ru"
+    transcription_timeout_seconds: int = 180
+
     log_level: str = "INFO"
     log_format: str = "json"
 

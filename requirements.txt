@@ -1,4 +1,5 @@
 aiohttp==3.13.2
+assemblyai==0.61.1
 asyncpg==0.30.0
 fastapi==0.128.0
 httpx==0.28.1
