@@ -725,12 +725,13 @@ async def create_gallery_work(
     title: str,
     notes: str,
     created_by_chat_id: int | None,
+    shape: str | None = None,
 ) -> dict[str, Any]:
     work_id = uuid4().hex
     row = await pool.fetchrow(
         """
-        INSERT INTO gallery_works (id, partition_type, glass_type, matting, title, notes, created_by_chat_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO gallery_works (id, partition_type, glass_type, matting, title, notes, created_by_chat_id, shape)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
         work_id,
@@ -740,12 +741,14 @@ async def create_gallery_work(
         title,
         notes,
         created_by_chat_id,
+        shape,
     )
     return dict(row)
 
 async def list_gallery_works(
     pool,
     partition_type: str | None = None,
+    shape: str | None = None,
     published_only: bool = False,
 ) -> list[dict[str, Any]]:
     where_clauses = []
@@ -753,6 +756,9 @@ async def list_gallery_works(
     if partition_type:
         args.append(partition_type)
         where_clauses.append(f"w.partition_type = ${len(args)}")
+    if shape:
+        args.append(shape)
+        where_clauses.append(f"w.shape = ${len(args)}")
     if published_only:
         where_clauses.append("w.is_published = true")
     
@@ -784,7 +790,7 @@ async def get_gallery_work(pool, work_id: str) -> dict[str, Any] | None:
     return work
 
 async def update_gallery_work(pool, work_id: str, **fields: Any) -> dict[str, Any]:
-    allowed = {"title", "notes", "partition_type", "glass_type", "matting", "is_published"}
+    allowed = {"title", "notes", "partition_type", "shape", "glass_type", "matting", "is_published"}
     updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not updates:
         existing = await pool.fetchrow("SELECT * FROM gallery_works WHERE id=$1", work_id)
@@ -855,18 +861,28 @@ async def delete_gallery_photo(pool, photo_id: str) -> dict[str, Any] | None:
 async def pick_random_gallery_works(
     pool,
     partition_type: str,
+    shape: str | None = None,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
-    query = """
+    extra_where = ""
+    args: list[Any] = [partition_type, limit]
+    if shape:
+        args.insert(1, shape)
+        args[2] = limit
+        extra_where = " AND w.shape = $2"
+        limit_param = "$3"
+    else:
+        limit_param = "$2"
+    query = f"""
         SELECT w.*
         FROM gallery_works w
-        WHERE w.partition_type = $1
+        WHERE w.partition_type = $1{extra_where}
           AND w.is_published = true
           AND EXISTS (SELECT 1 FROM gallery_photos p WHERE p.work_id = w.id)
         ORDER BY random()
-        LIMIT $2
+        LIMIT {limit_param}
     """
-    rows = await pool.fetch(query, partition_type, limit)
+    rows = await pool.fetch(query, *args)
     works = [dict(row) for row in rows]
     if not works:
         return works

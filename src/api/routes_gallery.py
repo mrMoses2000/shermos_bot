@@ -24,9 +24,11 @@ router = APIRouter(
 )
 
 PartitionType = Literal["fixed", "sliding_2", "sliding_3", "sliding_4"]
+ShapeType = Literal["Прямая", "Г-образная", "П-образная"]
 
 class WorkCreate(BaseModel):
     partition_type: PartitionType
+    shape: ShapeType | None = None
     glass_type: str | None = None
     matting: str | None = None
     title: str = Field(default="", max_length=200)
@@ -36,6 +38,7 @@ class WorkPatch(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     notes: str | None = Field(default=None, max_length=2000)
     partition_type: PartitionType | None = None
+    shape: ShapeType | None = None
     glass_type: str | None = None
     matting: str | None = None
     is_published: bool | None = None
@@ -45,11 +48,12 @@ FORMAT_EXT = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}
 @router.get("/works")
 async def list_works(
     partition_type: PartitionType | None = None,
+    shape: ShapeType | None = None,
     published_only: bool = False,
     pool=Depends(get_pool),
 ):
     works = await postgres.list_gallery_works(
-        pool, partition_type=partition_type, published_only=published_only
+        pool, partition_type=partition_type, shape=shape, published_only=published_only
     )
     return {"items": works}
 
@@ -62,6 +66,7 @@ async def create_work(
     work = await postgres.create_gallery_work(
         pool,
         partition_type=data.partition_type,
+        shape=data.shape,
         glass_type=data.glass_type,
         matting=data.matting,
         title=data.title,

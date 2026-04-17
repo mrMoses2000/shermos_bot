@@ -195,11 +195,19 @@ async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_
         await sender.send_photo(settings.telegram_bot_token, job.chat_id, paths[0], caption=caption)
     else:
         await sender.send_media_group(settings.telegram_bot_token, job.chat_id, paths, caption=caption)
+    collected = order.get("collected_params") or {}
+    if isinstance(collected, str):
+        import json as _json
+        try:
+            collected = _json.loads(collected)
+        except Exception:
+            collected = {}
+    shape = collected.get("shape", "")
     await sender.send_message(
         settings.telegram_bot_token,
         job.chat_id,
         "Показать 3 реальные работы такого же типа? Это поможет представить результат.",
-        reply_markup=gallery_offer_keyboard(order.get("request_id", ""), pt),
+        reply_markup=gallery_offer_keyboard(order.get("request_id", ""), pt, shape),
     )
 
 
@@ -274,8 +282,8 @@ async def _resolve_voice_text(
     return True
 
 
-async def _send_gallery_works(job: Job, pg_pool, sender: TelegramSender, order_id: str, partition_type: str) -> None:
-    works = await postgres.pick_random_gallery_works(pg_pool, partition_type, limit=3)
+async def _send_gallery_works(job: Job, pg_pool, sender: TelegramSender, order_id: str, partition_type: str, shape: str = "") -> None:
+    works = await postgres.pick_random_gallery_works(pg_pool, partition_type, shape=shape or None, limit=3)
     if not works:
         await sender.send_message(
             settings.telegram_bot_token, job.chat_id,
@@ -312,10 +320,11 @@ async def _handle_client_callback(job: Job, pg_pool, sender: TelegramSender) -> 
         
     if action == "gallery_show":
         order_id = parts[1]
-        partition_type = parts[2]
+        partition_type = parts[2] if len(parts) > 2 else "sliding_2"
+        shape = parts[3] if len(parts) > 3 else ""
         allowed_types = {"fixed", "sliding_2", "sliding_3", "sliding_4"}
         pt = partition_type if partition_type in allowed_types else "sliding_2"
-        await _send_gallery_works(job, pg_pool, sender, order_id, pt)
+        await _send_gallery_works(job, pg_pool, sender, order_id, pt, shape)
         return True
         
     if action == "gallery_skip":

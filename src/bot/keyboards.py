@@ -69,10 +69,10 @@ def manager_measurement_keyboard(measurement_id: int) -> dict:
 def open_mini_app_keyboard(url: str) -> dict:
     return _inline_keyboard([[{"text": "Открыть CMS", "web_app": {"url": url}}]])
 
-def gallery_offer_keyboard(order_id: str, partition_type: str) -> dict:
+def gallery_offer_keyboard(order_id: str, partition_type: str, shape: str = "") -> dict:
     return _inline_keyboard([
         [
-            {"text": "Да, покажите", "callback_data": f"gallery_show:{order_id}:{partition_type}"},
-            {"text": "Нет, спасибо", "callback_data": f"gallery_skip:{order_id}:{partition_type}"},
+            {"text": "Да, покажите", "callback_data": f"gallery_show:{order_id}:{partition_type}:{shape}"},
+            {"text": "Нет, спасибо", "callback_data": f"gallery_skip:{order_id}:{partition_type}:{shape}"},
         ]
     ])

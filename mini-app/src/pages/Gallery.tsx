@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "../api/client";
 
 type PartitionType = "fixed" | "sliding_2" | "sliding_3" | "sliding_4";
+type ShapeType = "Прямая" | "Г-образная" | "П-образная";
 
 const PARTITION_LABELS: Record<PartitionType, string> = {
   sliding_2: "Раздвижная 2 створки",
@@ -9,6 +10,8 @@ const PARTITION_LABELS: Record<PartitionType, string> = {
   sliding_4: "Раздвижная 4 створки",
   fixed: "Стационарная",
 };
+
+const SHAPE_OPTIONS: ShapeType[] = ["Прямая", "Г-образная", "П-образная"];
 
 type GalleryPhoto = {
   id: string;
@@ -24,6 +27,7 @@ type GalleryPhoto = {
 type GalleryWork = {
   id: string;
   partition_type: PartitionType;
+  shape: ShapeType | null;
   glass_type: string | null;
   matting: string | null;
   title: string;
@@ -46,11 +50,13 @@ export default function Gallery({ initData }: Props) {
   const [error, setError] = useState<string | null>(null);
   
   const [filterType, setFilterType] = useState<PartitionType | "all">("all");
-  
+  const [filterShape, setFilterShape] = useState<ShapeType | "all">("all");
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [expandedWorkId, setExpandedWorkId] = useState<string | null>(null);
-  
+
   const [newType, setNewType] = useState<PartitionType>("sliding_2");
+  const [newShape, setNewShape] = useState<ShapeType | "">("");
   const [newGlass, setNewGlass] = useState("");
   const [newMatting, setNewMatting] = useState("");
   const [newTitle, setNewTitle] = useState("");
@@ -60,8 +66,12 @@ export default function Gallery({ initData }: Props) {
   const loadWorks = async () => {
     try {
       setLoading(true);
+      const params = new URLSearchParams();
+      if (filterType !== "all") params.set("partition_type", filterType);
+      if (filterShape !== "all") params.set("shape", filterShape);
+      const qs = params.toString();
       const res = await apiGet<{ items: GalleryWork[] }>(
-        `/api/gallery/works${filterType !== "all" ? `?partition_type=${filterType}` : ""}`,
+        `/api/gallery/works${qs ? `?${qs}` : ""}`,
         initData
       );
       setWorks(res.items);
@@ -74,7 +84,7 @@ export default function Gallery({ initData }: Props) {
 
   useEffect(() => {
     loadWorks();
-  }, [filterType, initData]);
+  }, [filterType, filterShape, initData]);
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,6 +93,7 @@ export default function Gallery({ initData }: Props) {
       // 1. Create work
       const work = await apiPost<GalleryWork>("/api/gallery/works", initData, {
         partition_type: newType,
+        shape: newShape || null,
         glass_type: newGlass || null,
         matting: newMatting || null,
         title: newTitle,
@@ -108,6 +119,7 @@ export default function Gallery({ initData }: Props) {
       setShowAddForm(false);
       setNewTitle("");
       setNewNotes("");
+      setNewShape("");
       setNewGlass("");
       setNewMatting("");
       setNewFiles(null);
@@ -198,13 +210,21 @@ export default function Gallery({ initData }: Props) {
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "1rem" }}>
+      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem", alignItems: "center" }}>
+        <select
+          value={filterShape}
+          onChange={(e) => setFilterShape(e.target.value as any)}
+          style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #ddd" }}
+        >
+          <option value="all">Все формы</option>
+          {SHAPE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
         <select
           value={filterType}
           onChange={(e) => setFilterType(e.target.value as any)}
           style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #ddd" }}
         >
-          <option value="all">Все типы</option>
+          <option value="all">Все конструкции</option>
           <option value="sliding_2">{PARTITION_LABELS.sliding_2}</option>
           <option value="sliding_3">{PARTITION_LABELS.sliding_3}</option>
           <option value="sliding_4">{PARTITION_LABELS.sliding_4}</option>
@@ -212,6 +232,7 @@ export default function Gallery({ initData }: Props) {
         </select>
         <button
           className="button is-primary"
+          style={{ marginLeft: "auto" }}
           onClick={() => setShowAddForm(!showAddForm)}
         >
           {showAddForm ? "Отмена" : "Добавить работу"}
@@ -223,7 +244,14 @@ export default function Gallery({ initData }: Props) {
           <h3>Новая работа</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
             <label>
-              Тип:
+              Форма:
+              <select value={newShape} onChange={(e) => setNewShape(e.target.value as any)} style={{ display: "block", width: "100%" }}>
+                <option value="">— не указана —</option>
+                {SHAPE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <label>
+              Конструкция:
               <select value={newType} onChange={(e) => setNewType(e.target.value as any)} style={{ display: "block", width: "100%" }}>
                 <option value="sliding_2">{PARTITION_LABELS.sliding_2}</option>
                 <option value="sliding_3">{PARTITION_LABELS.sliding_3}</option>
@@ -278,7 +306,8 @@ export default function Gallery({ initData }: Props) {
                   
                   <div style={{ flex: 1 }}>
                     <h3 style={{ margin: "0 0 0.5rem" }}>{work.title || "Без названия"}</h3>
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                      {work.shape && <span style={{ background: "#d0e8ff", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{work.shape}</span>}
                       <span style={{ background: "#e0e0e0", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{PARTITION_LABELS[work.partition_type]}</span>
                       <span style={{ background: "#e0e0e0", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{work.photo_count} фото</span>
                     </div>
