@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "../api/client";
+import Spinner from "../components/Spinner";
 
 type PartitionType = "fixed" | "sliding_2" | "sliding_3" | "sliding_4";
 type ShapeType = "Прямая" | "Г-образная" | "П-образная";
@@ -38,9 +39,7 @@ type GalleryWork = {
   photos?: GalleryPhoto[];
 };
 
-type Props = {
-  initData: string;
-};
+type Props = { initData: string };
 
 const API_URL = import.meta.env.VITE_API_BASE || "";
 
@@ -48,7 +47,7 @@ export default function Gallery({ initData }: Props) {
   const [works, setWorks] = useState<GalleryWork[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+
   const [filterType, setFilterType] = useState<PartitionType | "all">("all");
   const [filterShape, setFilterShape] = useState<ShapeType | "all">("all");
 
@@ -62,6 +61,7 @@ export default function Gallery({ initData }: Props) {
   const [newTitle, setNewTitle] = useState("");
   const [newNotes, setNewNotes] = useState("");
   const [newFiles, setNewFiles] = useState<FileList | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const loadWorks = async () => {
     try {
@@ -72,7 +72,7 @@ export default function Gallery({ initData }: Props) {
       const qs = params.toString();
       const res = await apiGet<{ items: GalleryWork[] }>(
         `/api/gallery/works${qs ? `?${qs}` : ""}`,
-        initData
+        initData,
       );
       setWorks(res.items);
     } catch (err: any) {
@@ -89,8 +89,8 @@ export default function Gallery({ initData }: Props) {
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSaving(true);
     try {
-      // 1. Create work
       const work = await apiPost<GalleryWork>("/api/gallery/works", initData, {
         partition_type: newType,
         shape: newShape || null,
@@ -99,23 +99,15 @@ export default function Gallery({ initData }: Props) {
         title: newTitle,
         notes: newNotes,
       });
-
-      // 2. Upload photos
       if (newFiles && newFiles.length > 0) {
-        // We do sequential uploads as requested, though API supports multiple.
-        // Let's just pass all files to apiUpload, but one by one or in a batch?
-        // "Uploads are sequential (not Promise.all) to keep error messages clear and DB load predictable."
-        // We can just upload them 1 by 1 to the same endpoint.
-        const filesArray = Array.from(newFiles);
-        for (const file of filesArray) {
+        for (const file of Array.from(newFiles)) {
           await apiUpload<{ items: GalleryPhoto[] }>(
             `/api/gallery/works/${work.id}/photos`,
             initData,
-            [file]
+            [file],
           );
         }
       }
-
       setShowAddForm(false);
       setNewTitle("");
       setNewNotes("");
@@ -126,14 +118,14 @@ export default function Gallery({ initData }: Props) {
       await loadWorks();
     } catch (err: any) {
       setError(`Ошибка добавления: ${err.message}`);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleTogglePublish = async (id: string, isPublished: boolean) => {
     try {
-      await apiPatch(`/api/gallery/works/${id}`, initData, {
-        is_published: !isPublished,
-      });
+      await apiPatch(`/api/gallery/works/${id}`, initData, { is_published: !isPublished });
       await loadWorks();
     } catch (err: any) {
       setError(err.message);
@@ -154,9 +146,7 @@ export default function Gallery({ initData }: Props) {
     if (!window.confirm("Удалить это фото?")) return;
     try {
       await apiDelete(`/api/gallery/photos/${photoId}`, initData);
-      // Reload expanded work to show remaining photos
       await loadWorkDetails(workId);
-      // And refresh main list to update count
       await loadWorks();
     } catch (err: any) {
       setError(err.message);
@@ -167,8 +157,7 @@ export default function Gallery({ initData }: Props) {
     if (!e.target.files || e.target.files.length === 0) return;
     setError(null);
     try {
-      const filesArray = Array.from(e.target.files);
-      for (const file of filesArray) {
+      for (const file of Array.from(e.target.files)) {
         await apiUpload(`/api/gallery/works/${workId}/photos`, initData, [file]);
       }
       await loadWorkDetails(workId);
@@ -193,7 +182,6 @@ export default function Gallery({ initData }: Props) {
       setExpandedWorkId(null);
     } else {
       setExpandedWorkId(id);
-      // ensure we have photos
       const work = works.find((w) => w.id === id);
       if (work && !work.photos) {
         await loadWorkDetails(id);
@@ -202,27 +190,31 @@ export default function Gallery({ initData }: Props) {
   };
 
   return (
-    <div className="card">
-      <h2 className="card-title">Галерея работ</h2>
-      {error && (
-        <div style={{ padding: "10px", background: "#fEE", color: "red", marginBottom: "1rem", borderRadius: "8px" }}>
-          {error}
-        </div>
-      )}
+    <div className="page-stack">
+      <div className="section-heading">
+        <h2 className="section-title">Галерея работ</h2>
+        <p className="section-subtitle">Реальные проекты для демонстрации клиентам.</p>
+      </div>
 
-      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem", alignItems: "center" }}>
+      {error && <div className="error-banner">{error}</div>}
+
+      <div className="gallery-filters">
         <select
+          className="form-select"
+          style={{ width: "auto", minWidth: "140px" }}
           value={filterShape}
           onChange={(e) => setFilterShape(e.target.value as any)}
-          style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #ddd" }}
         >
           <option value="all">Все формы</option>
-          {SHAPE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+          {SHAPE_OPTIONS.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
         </select>
         <select
+          className="form-select"
+          style={{ width: "auto", minWidth: "180px" }}
           value={filterType}
           onChange={(e) => setFilterType(e.target.value as any)}
-          style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #ddd" }}
         >
           <option value="all">Все конструкции</option>
           <option value="sliding_2">{PARTITION_LABELS.sliding_2}</option>
@@ -231,117 +223,196 @@ export default function Gallery({ initData }: Props) {
           <option value="fixed">{PARTITION_LABELS.fixed}</option>
         </select>
         <button
-          className="button is-primary"
+          className="btn btn-primary"
           style={{ marginLeft: "auto" }}
           onClick={() => setShowAddForm(!showAddForm)}
+          type="button"
         >
-          {showAddForm ? "Отмена" : "Добавить работу"}
+          {showAddForm ? "Отмена" : "+ Добавить работу"}
         </button>
       </div>
 
       {showAddForm && (
-        <form onSubmit={handleAddSubmit} style={{ background: "#f9f9f9", padding: "1rem", borderRadius: "8px", marginBottom: "1rem" }}>
+        <div className="gallery-add-form">
           <h3>Новая работа</h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            <label>
-              Форма:
-              <select value={newShape} onChange={(e) => setNewShape(e.target.value as any)} style={{ display: "block", width: "100%" }}>
-                <option value="">— не указана —</option>
-                {SHAPE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </label>
-            <label>
-              Конструкция:
-              <select value={newType} onChange={(e) => setNewType(e.target.value as any)} style={{ display: "block", width: "100%" }}>
-                <option value="sliding_2">{PARTITION_LABELS.sliding_2}</option>
-                <option value="sliding_3">{PARTITION_LABELS.sliding_3}</option>
-                <option value="sliding_4">{PARTITION_LABELS.sliding_4}</option>
-                <option value="fixed">{PARTITION_LABELS.fixed}</option>
-              </select>
-            </label>
-            <label>
-              Стекло (опц):
-              <input type="text" value={newGlass} onChange={(e) => setNewGlass(e.target.value)} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Матировка (опц):
-              <input type="text" value={newMatting} onChange={(e) => setNewMatting(e.target.value)} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Название (опц):
-              <input type="text" value={newTitle} onChange={(e) => setNewTitle(e.target.value)} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Заметки (опц):
-              <textarea value={newNotes} onChange={(e) => setNewNotes(e.target.value)} style={{ display: "block", width: "100%", minHeight: "60px" }} />
-            </label>
-            <label>
-              Фотографии:
-              <input type="file" multiple accept="image/*" onChange={(e) => setNewFiles(e.target.files)} style={{ display: "block" }} />
-            </label>
-            <button className="button is-primary" type="submit" style={{ marginTop: "1rem" }}>
-              Сохранить
-            </button>
-          </div>
-        </form>
+          <form onSubmit={handleAddSubmit}>
+            <div className="form-grid">
+              <div className="form-group">
+                <label className="form-label">Форма</label>
+                <select
+                  className="form-select"
+                  value={newShape}
+                  onChange={(e) => setNewShape(e.target.value as any)}
+                >
+                  <option value="">— не указана —</option>
+                  {SHAPE_OPTIONS.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Конструкция</label>
+                <select
+                  className="form-select"
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value as any)}
+                >
+                  <option value="sliding_2">{PARTITION_LABELS.sliding_2}</option>
+                  <option value="sliding_3">{PARTITION_LABELS.sliding_3}</option>
+                  <option value="sliding_4">{PARTITION_LABELS.sliding_4}</option>
+                  <option value="fixed">{PARTITION_LABELS.fixed}</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Стекло (опц.)</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={newGlass}
+                  onChange={(e) => setNewGlass(e.target.value)}
+                  placeholder="напр. матовое, тонированное"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Матировка (опц.)</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={newMatting}
+                  onChange={(e) => setNewMatting(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Название (опц.)</label>
+                <input
+                  className="form-input"
+                  type="text"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  placeholder="краткое описание"
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Заметки (опц.)</label>
+                <textarea
+                  className="form-textarea"
+                  value={newNotes}
+                  onChange={(e) => setNewNotes(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Фотографии</label>
+                <input
+                  className="form-input"
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  onChange={(e) => setNewFiles(e.target.files)}
+                />
+              </div>
+              <button className="btn btn-primary" type="submit" disabled={saving}>
+                {saving ? "Сохранение…" : "Сохранить"}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
       {loading ? (
-        <p>Загрузка...</p>
+        <Spinner />
       ) : works.length === 0 ? (
-        <p>Нет работ.</p>
+        <div className="empty-state">
+          <div className="empty-state-icon" aria-hidden="true">🖼️</div>
+          <p className="empty-state-text">Нет работ. Добавьте первую.</p>
+        </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <div className="gallery-list">
           {works.map((work) => {
             const isExpanded = expandedWorkId === work.id;
             return (
-              <div key={work.id} style={{ border: "1px solid #ddd", borderRadius: "8px", overflow: "hidden" }}>
-                <div style={{ padding: "1rem", background: "#fafafa", cursor: "pointer", display: "flex", alignItems: "center", gap: "1rem" }} onClick={() => handleCardClick(work.id)}>
-                  {/* Thumbnail of first photo if available */}
+              <div key={work.id} className="gallery-work-card">
+                <div className="gallery-work-header" onClick={() => handleCardClick(work.id)}>
                   {work.photos && work.photos.length > 0 ? (
-                    <img src={`${API_URL}${work.photos[0].url}`} loading="lazy" style={{ width: "60px", height: "60px", objectFit: "cover", borderRadius: "4px" }} />
+                    <img
+                      className="gallery-thumb"
+                      src={`${API_URL}${work.photos[0].url}`}
+                      loading="lazy"
+                      alt=""
+                    />
                   ) : (
-                    <div style={{ width: "60px", height: "60px", background: "#eee", borderRadius: "4px" }} />
+                    <div className="gallery-thumb-placeholder" />
                   )}
-                  
-                  <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: "0 0 0.5rem" }}>{work.title || "Без названия"}</h3>
-                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                      {work.shape && <span style={{ background: "#d0e8ff", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{work.shape}</span>}
-                      <span style={{ background: "#e0e0e0", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{PARTITION_LABELS[work.partition_type]}</span>
-                      <span style={{ background: "#e0e0e0", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{work.photo_count} фото</span>
+                  <div className="gallery-work-meta">
+                    <div className="gallery-work-title">{work.title || "Без названия"}</div>
+                    <div className="gallery-badges">
+                      {work.shape && (
+                        <span className="badge badge-shape">{work.shape}</span>
+                      )}
+                      <span className="badge badge-default">
+                        {PARTITION_LABELS[work.partition_type]}
+                      </span>
+                      <span className="badge badge-default">{work.photo_count} фото</span>
+                      {work.is_published ? (
+                        <span className="badge badge-success">Опубликовано</span>
+                      ) : (
+                        <span className="badge badge-warning">Черновик</span>
+                      )}
                     </div>
                   </div>
                 </div>
 
                 {isExpanded && (
-                  <div style={{ padding: "1rem", borderTop: "1px solid #ddd" }}>
-                    <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", flexWrap: "wrap" }}>
-                      <button className="button is-secondary" onClick={() => handleTogglePublish(work.id, work.is_published)}>
+                  <div className="gallery-work-body">
+                    <div className="gallery-actions">
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        type="button"
+                        onClick={() => handleTogglePublish(work.id, work.is_published)}
+                      >
                         {work.is_published ? "Скрыть" : "Опубликовать"}
                       </button>
-                      <label className="button is-secondary" style={{ cursor: "pointer", margin: 0 }}>
+                      <label className="btn btn-secondary btn-sm" style={{ cursor: "pointer" }}>
                         Добавить фото
-                        <input type="file" multiple accept="image/*" style={{ display: "none" }} onChange={(e) => handleUploadMore(work.id, e)} />
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*"
+                          style={{ display: "none" }}
+                          onChange={(e) => handleUploadMore(work.id, e)}
+                        />
                       </label>
-                      <button className="button is-danger" onClick={() => handleDeleteWork(work.id)}>
+                      <button
+                        className="btn btn-danger btn-sm"
+                        type="button"
+                        onClick={() => handleDeleteWork(work.id)}
+                      >
                         Удалить работу
                       </button>
                     </div>
 
-                    <div style={{ display: "flex", gap: "1rem", overflowX: "auto", paddingBottom: "0.5rem" }}>
+                    <div className="gallery-photos">
                       {(work.photos || []).map((p) => (
-                        <div key={p.id} style={{ position: "relative", minWidth: "150px" }}>
-                          <img src={`${API_URL}${p.url}`} loading="lazy" style={{ width: "150px", height: "150px", objectFit: "cover", borderRadius: "8px" }} />
+                        <div key={p.id} className="gallery-photo-item">
+                          <img
+                            className="gallery-photo-img"
+                            src={`${API_URL}${p.url}`}
+                            loading="lazy"
+                            alt=""
+                          />
                           <button
-                            style={{ position: "absolute", top: "5px", right: "5px", background: "rgba(255,0,0,0.8)", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" }}
+                            className="gallery-photo-del"
+                            type="button"
                             onClick={() => handleDeletePhoto(p.id, work.id)}
                           >
                             Удалить
                           </button>
                         </div>
                       ))}
-                      {work.photos?.length === 0 && <p style={{ color: "#888" }}>Нет загруженных фото</p>}
+                      {work.photos?.length === 0 && (
+                        <p className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
+                          Нет загруженных фото
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}

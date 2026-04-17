@@ -17,10 +17,7 @@ export default function App() {
   const authReady = useMemo(() => isTelegram && initData.length > 0, [initData, isTelegram]);
 
   useEffect(() => {
-    type TelegramTheme = { colorScheme?: "dark" | "light" };
-    const webApp = window.Telegram?.WebApp as TelegramTheme | undefined;
-    const colorScheme = webApp?.colorScheme;
-    document.documentElement.dataset.theme = colorScheme === "dark" ? "dark" : "light";
+    document.documentElement.style.colorScheme = "dark";
   }, []);
 
   const content = (() => {
