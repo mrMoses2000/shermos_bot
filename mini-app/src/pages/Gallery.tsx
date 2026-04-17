@@ -3,6 +3,13 @@ import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "../api/client";
 
 type PartitionType = "fixed" | "sliding_2" | "sliding_3" | "sliding_4";
 
+const PARTITION_LABELS: Record<PartitionType, string> = {
+  sliding_2: "Раздвижная 2 створки",
+  sliding_3: "Раздвижная 3 створки",
+  sliding_4: "Раздвижная 4 створки",
+  fixed: "Стационарная",
+};
+
 type GalleryPhoto = {
   id: string;
   work_id: string;
@@ -198,10 +205,10 @@ export default function Gallery({ initData }: Props) {
           style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #ddd" }}
         >
           <option value="all">Все типы</option>
-          <option value="fixed">Fixed</option>
-          <option value="sliding_2">Sliding 2</option>
-          <option value="sliding_3">Sliding 3</option>
-          <option value="sliding_4">Sliding 4</option>
+          <option value="sliding_2">{PARTITION_LABELS.sliding_2}</option>
+          <option value="sliding_3">{PARTITION_LABELS.sliding_3}</option>
+          <option value="sliding_4">{PARTITION_LABELS.sliding_4}</option>
+          <option value="fixed">{PARTITION_LABELS.fixed}</option>
         </select>
         <button
           className="button is-primary"
@@ -218,10 +225,10 @@ export default function Gallery({ initData }: Props) {
             <label>
               Тип:
               <select value={newType} onChange={(e) => setNewType(e.target.value as any)} style={{ display: "block", width: "100%" }}>
-                <option value="fixed">Fixed</option>
-                <option value="sliding_2">Sliding 2</option>
-                <option value="sliding_3">Sliding 3</option>
-                <option value="sliding_4">Sliding 4</option>
+                <option value="sliding_2">{PARTITION_LABELS.sliding_2}</option>
+                <option value="sliding_3">{PARTITION_LABELS.sliding_3}</option>
+                <option value="sliding_4">{PARTITION_LABELS.sliding_4}</option>
+                <option value="fixed">{PARTITION_LABELS.fixed}</option>
               </select>
             </label>
             <label>
@@ -272,7 +279,7 @@ export default function Gallery({ initData }: Props) {
                   <div style={{ flex: 1 }}>
                     <h3 style={{ margin: "0 0 0.5rem" }}>{work.title || "Без названия"}</h3>
                     <div style={{ display: "flex", gap: "0.5rem" }}>
-                      <span style={{ background: "#e0e0e0", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{work.partition_type}</span>
+                      <span style={{ background: "#e0e0e0", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{PARTITION_LABELS[work.partition_type]}</span>
                       <span style={{ background: "#e0e0e0", padding: "2px 6px", borderRadius: "4px", fontSize: "0.8rem" }}>{work.photo_count} фото</span>
                     </div>
                   </div>
