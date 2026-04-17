@@ -117,6 +117,14 @@ async def mark_update_received(pool, update_id: int) -> bool:
     return row is not None
 
 
+async def get_update_status(pool, update_id: int) -> str | None:
+    row = await pool.fetchrow(
+        "SELECT status FROM processed_updates WHERE telegram_update_id=$1",
+        update_id,
+    )
+    return row["status"] if row else None
+
+
 async def mark_update_status(pool, update_id: int, status: str, error: str | None = None) -> None:
     await pool.execute(
         """

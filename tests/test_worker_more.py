@@ -61,6 +61,10 @@ async def test_manager_job_orders_and_status(monkeypatch):
         calls.append(("order_status", order_id, status))
         return {"request_id": order_id, "status": status}
 
+    async def fake_get_status(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(worker.postgres, "get_update_status", fake_get_status)
     monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
     monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound)
     monkeypatch.setattr(worker.postgres, "mark_outbound_sent", fake_mark_sent)
@@ -96,6 +100,10 @@ async def test_manager_job_fallback_command(monkeypatch):
     async def fake_mark_sent(*_args, **_kwargs):
         return None
 
+    async def fake_get_status(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(worker.postgres, "get_update_status", fake_get_status)
     monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
     monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound)
     monkeypatch.setattr(worker.postgres, "mark_outbound_sent", fake_mark_sent)
@@ -109,3 +117,25 @@ async def test_manager_job_fallback_command(monkeypatch):
     )
 
     assert "Команды" in sender.messages[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_already_completed_job_is_skipped(monkeypatch):
+    """If processed_updates already has status=completed, job must not be re-processed."""
+    called = []
+
+    async def fake_get_status(_pool, update_id):
+        return "completed"
+
+    async def fake_mark_status(*_a, **_kw):
+        called.append("mark_status")
+
+    monkeypatch.setattr(worker.postgres, "get_update_status", fake_get_status)
+    monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
+
+    sender = FakeSender()
+    job = Job(update_id=42, chat_id=10, user_id=10, text="hi")
+    await worker.process_client_job(job, object(), FakeRedis(), sender)
+
+    assert not called, "mark_update_status must not be called for already-completed job"
+    assert not sender.messages, "No messages must be sent for already-completed job"

@@ -62,9 +62,13 @@ def _patch_outbound_recording(monkeypatch):
     async def mark_update_status(*_a, **_kw):
         return None
 
+    async def get_update_status(*_a, **_kw):
+        return None
+
     monkeypatch.setattr(worker.postgres, "insert_outbound_event", insert_outbound_event)
     monkeypatch.setattr(worker.postgres, "mark_outbound_sent", mark_outbound_sent)
     monkeypatch.setattr(worker.postgres, "mark_update_status", mark_update_status)
+    monkeypatch.setattr(worker.postgres, "get_update_status", get_update_status)
 
 
 @pytest.mark.asyncio
@@ -115,8 +119,7 @@ async def test_resolve_voice_text_happy_path(monkeypatch):
     assert ("record_voice",) == (sender.actions[0][1],)
     assert sender.get_file_calls == ["v-77"]
     assert sender.downloaded == ["voice/file_1.oga"]
-    # Transcript echo message to client for verification
-    assert any("Распознано" in m["text"] for m in sender.messages)
+    assert not any("Распознано" in m["text"] for m in sender.messages)
 
 
 @pytest.mark.asyncio
@@ -259,7 +262,6 @@ async def test_process_client_job_transcribes_voice_then_runs_llm(monkeypatch):
 
     # The transcript landed in the prompt
     assert captured["prompt_text"] == "рассчитай перегородку три на два шестьдесят"
-    # Both the transcript echo AND the LLM reply were sent
     texts = [m["text"] for m in sender.messages]
-    assert any("Распознано" in t for t in texts)
+    assert not any("Распознано" in t for t in texts)
     assert any("Ок, считаю" in t for t in texts)

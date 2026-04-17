@@ -32,6 +32,10 @@ def manager_db(monkeypatch):
     async def fake_get_state(_pool, chat_id):
         return None
 
+    async def fake_get_update_status(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(worker.postgres, "get_update_status", fake_get_update_status)
     monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
     monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound)
     monkeypatch.setattr(worker.postgres, "mark_outbound_sent", fake_mark_sent)

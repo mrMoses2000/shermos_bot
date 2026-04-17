@@ -29,6 +29,9 @@ class MemoryPostgres:
     async def insert_inbound_event(self, _pool, update_id, chat_id, user_id, text, raw_update):
         return 1
 
+    async def get_update_status(self, _pool, update_id):
+        return None
+
     async def mark_update_status(self, _pool, update_id, status, error=None):
         self.statuses.append((update_id, status, error))
 
@@ -77,6 +80,7 @@ async def test_e2e_smoke_webhook_to_worker_with_mocked_llm(monkeypatch):
     ):
         monkeypatch.setattr(webhook.postgres, name, getattr(memory_pg, name))
     for name in (
+        "get_update_status",
         "mark_update_status",
         "insert_outbound_event",
         "mark_outbound_sent",

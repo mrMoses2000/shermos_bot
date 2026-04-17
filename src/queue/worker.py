@@ -270,12 +270,6 @@ async def _resolve_voice_text(
         await postgres.mark_update_status(pg_pool, job.update_id, "failed", "empty_transcript")
         return False
 
-    # Echo transcript back so the client can spot recognition errors.
-    await _send_and_record(
-        pg_pool, sender, settings.telegram_bot_token, job.chat_id,
-        f"<i>Распознано:</i> {transcript}",
-    )
-
     # Replace the job text: Pydantic models are frozen-ish, so update attr via __dict__.
     job.text = transcript
     job.msg_type = "text"
@@ -352,6 +346,10 @@ async def process_client_job(
         return
 
     try:
+        existing_status = await postgres.get_update_status(pg_pool, job.update_id)
+        if existing_status in ("completed", "failed"):
+            logger.info("skipping_already_processed", extra={"update_id": job.update_id, "status": existing_status})
+            return
         await postgres.mark_update_status(pg_pool, job.update_id, "processing")
         if settings.send_typing_indicator:
             await sender.send_chat_action(settings.telegram_bot_token, job.chat_id)
@@ -619,6 +617,10 @@ async def process_manager_job(
     sender: TelegramSender = telegram_sender,
 ) -> None:
     try:
+        existing_status = await postgres.get_update_status(pg_pool, job.update_id)
+        if existing_status in ("completed", "failed"):
+            logger.info("skipping_already_processed", extra={"update_id": job.update_id, "status": existing_status})
+            return
         await postgres.mark_update_status(pg_pool, job.update_id, "processing")
         text = (job.text or job.callback_data or "").strip()
         if text.startswith("/start") or text.startswith("/health"):
