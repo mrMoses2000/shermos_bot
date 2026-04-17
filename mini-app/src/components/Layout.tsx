@@ -6,6 +6,7 @@ const nav: Array<{ id: Page; label: string }> = [
   { id: "orders", label: "Заказы" },
   { id: "clients", label: "Клиенты" },
   { id: "measurements", label: "Замеры" },
+  { id: "gallery", label: "Галерея" },
   { id: "pricing", label: "Цены" },
   { id: "settings", label: "Настройки" }
 ];

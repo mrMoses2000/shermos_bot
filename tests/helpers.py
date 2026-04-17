@@ -12,6 +12,36 @@ def signed_init_data(bot_token: str = "manager-token", **extra: str) -> str:
     return urlencode({**payload, "hash": digest})
 
 
+class FakePool:
+    def __init__(self, results=None):
+        self.results = results if results is not None else []
+        self.calls = []
+        self.call_idx = 0
+
+    def _next_result(self):
+        if self.call_idx < len(self.results):
+            res = self.results[self.call_idx]
+            self.call_idx += 1
+            return res
+        return None
+
+    async def fetchrow(self, query, *args):
+        self.calls.append(("fetchrow", query, args))
+        return self._next_result()
+
+    async def fetch(self, query, *args):
+        self.calls.append(("fetch", query, args))
+        res = self._next_result()
+        return res if res is not None else []
+
+    async def fetchval(self, query, *args):
+        self.calls.append(("fetchval", query, args))
+        return self._next_result()
+
+    async def execute(self, query, *args):
+        self.calls.append(("execute", query, args))
+        return "OK"
+
 class FakeSender:
     def __init__(self):
         self.messages = []

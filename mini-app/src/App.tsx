@@ -6,9 +6,10 @@ import Clients from "./pages/Clients";
 import Measurements from "./pages/Measurements";
 import PricingEditor from "./pages/PricingEditor";
 import Settings from "./pages/Settings";
+import Gallery from "./pages/Gallery";
 import { useTelegram } from "./hooks/useTelegram";
 
-export type Page = "dashboard" | "orders" | "clients" | "measurements" | "pricing" | "settings";
+export type Page = "dashboard" | "orders" | "clients" | "measurements" | "pricing" | "gallery" | "settings";
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -37,6 +38,7 @@ export default function App() {
     if (page === "clients") return <Clients initData={initData} />;
     if (page === "measurements") return <Measurements initData={initData} />;
     if (page === "pricing") return <PricingEditor initData={initData} />;
+    if (page === "gallery") return <Gallery initData={initData} />;
     if (page === "settings") return <Settings initData={initData} />;
     return <Dashboard initData={initData} />;
   })();

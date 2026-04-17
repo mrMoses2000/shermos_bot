@@ -716,3 +716,170 @@ async def get_dashboard_stats(pool, days: int = 30) -> dict[str, Any]:
     stats = dict(row) if row else {"total_orders": 0, "total_revenue": 0.0, "orders_today": 0}
     stats["pending_measurements"] = pending_measurements or 0
     return stats
+
+async def create_gallery_work(
+    pool,
+    partition_type: str,
+    glass_type: str | None,
+    matting: str | None,
+    title: str,
+    notes: str,
+    created_by_chat_id: int | None,
+) -> dict[str, Any]:
+    work_id = uuid4().hex
+    row = await pool.fetchrow(
+        """
+        INSERT INTO gallery_works (id, partition_type, glass_type, matting, title, notes, created_by_chat_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+        """,
+        work_id,
+        partition_type,
+        glass_type,
+        matting,
+        title,
+        notes,
+        created_by_chat_id,
+    )
+    return dict(row)
+
+async def list_gallery_works(
+    pool,
+    partition_type: str | None = None,
+    published_only: bool = False,
+) -> list[dict[str, Any]]:
+    where_clauses = []
+    args = []
+    if partition_type:
+        args.append(partition_type)
+        where_clauses.append(f"w.partition_type = ${len(args)}")
+    if published_only:
+        where_clauses.append("w.is_published = true")
+    
+    where_sql = ""
+    if where_clauses:
+        where_sql = "WHERE " + " AND ".join(where_clauses)
+    
+    query = f"""
+        SELECT w.*,
+               count(p.id)::int as photo_count
+        FROM gallery_works w
+        LEFT JOIN gallery_photos p ON p.work_id = w.id
+        {where_sql}
+        GROUP BY w.id
+        ORDER BY w.created_at DESC
+    """
+    rows = await pool.fetch(query, *args)
+    return [dict(row) for row in rows]
+
+async def get_gallery_work(pool, work_id: str) -> dict[str, Any] | None:
+    work_row = await pool.fetchrow("SELECT * FROM gallery_works WHERE id=$1", work_id)
+    if not work_row:
+        return None
+    work = dict(work_row)
+    photo_rows = await pool.fetch(
+        "SELECT * FROM gallery_photos WHERE work_id=$1 ORDER BY sort_order, id", work_id
+    )
+    work["photos"] = [dict(row) for row in photo_rows]
+    return work
+
+async def update_gallery_work(pool, work_id: str, **fields: Any) -> dict[str, Any]:
+    allowed = {"title", "notes", "partition_type", "glass_type", "matting", "is_published"}
+    updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not updates:
+        existing = await pool.fetchrow("SELECT * FROM gallery_works WHERE id=$1", work_id)
+        if not existing:
+            raise ValueError(f"Gallery work not found: {work_id}")
+        return dict(existing)
+    
+    set_sql = ", ".join(f"{key}=${idx}" for idx, key in enumerate(updates, start=2))
+    values = list(updates.values())
+    row = await pool.fetchrow(
+        f"""
+        UPDATE gallery_works
+        SET {set_sql}, updated_at=now()
+        WHERE id=$1
+        RETURNING *
+        """,
+        work_id,
+        *values,
+    )
+    if not row:
+        raise ValueError(f"Gallery work not found: {work_id}")
+    return dict(row)
+
+async def delete_gallery_work(pool, work_id: str) -> list[dict[str, Any]]:
+    # fetch photos to return so caller can unlink files
+    photos = await list_photos_for_work(pool, work_id)
+    row = await pool.fetchrow("DELETE FROM gallery_works WHERE id=$1 RETURNING id", work_id)
+    if not row:
+        raise ValueError(f"Gallery work not found: {work_id}")
+    return photos
+
+async def add_gallery_photo(
+    pool,
+    work_id: str,
+    file_path: str,
+    sort_order: int,
+    width: int | None,
+    height: int | None,
+    size_bytes: int | None,
+) -> dict[str, Any]:
+    photo_id = uuid4().hex
+    row = await pool.fetchrow(
+        """
+        INSERT INTO gallery_photos (id, work_id, file_path, sort_order, width, height, size_bytes)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+        """,
+        photo_id,
+        work_id,
+        file_path,
+        sort_order,
+        width,
+        height,
+        size_bytes,
+    )
+    return dict(row)
+
+async def list_photos_for_work(pool, work_id: str) -> list[dict[str, Any]]:
+    rows = await pool.fetch(
+        "SELECT * FROM gallery_photos WHERE work_id=$1 ORDER BY sort_order, id", work_id
+    )
+    return [dict(row) for row in rows]
+
+async def delete_gallery_photo(pool, photo_id: str) -> dict[str, Any] | None:
+    row = await pool.fetchrow("DELETE FROM gallery_photos WHERE id=$1 RETURNING *", photo_id)
+    return dict(row) if row else None
+
+async def pick_random_gallery_works(
+    pool,
+    partition_type: str,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT w.*
+        FROM gallery_works w
+        WHERE w.partition_type = $1
+          AND w.is_published = true
+          AND EXISTS (SELECT 1 FROM gallery_photos p WHERE p.work_id = w.id)
+        ORDER BY random()
+        LIMIT $2
+    """
+    rows = await pool.fetch(query, partition_type, limit)
+    works = [dict(row) for row in rows]
+    if not works:
+        return works
+    
+    work_ids = [w["id"] for w in works]
+    photos_query = "SELECT * FROM gallery_photos WHERE work_id = ANY($1) ORDER BY sort_order, id"
+    photo_rows = await pool.fetch(photos_query, work_ids)
+    
+    photos_by_work = {work_id: [] for work_id in work_ids}
+    for pr in photo_rows:
+        photos_by_work[pr["work_id"]].append(dict(pr))
+        
+    for w in works:
+        w["photos"] = photos_by_work[w["id"]]
+        
+    return works

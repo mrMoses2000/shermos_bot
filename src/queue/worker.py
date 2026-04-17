@@ -8,7 +8,8 @@ from typing import Any
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from src.bot.keyboards import manager_measurement_keyboard, open_mini_app_keyboard, rate_render_keyboard
+from src.bot.keyboards import gallery_offer_keyboard, manager_measurement_keyboard, open_mini_app_keyboard, rate_render_keyboard
+from pathlib import Path
 from src.bot.telegram_sender import TelegramSender, telegram_sender
 from src.bot.transcribe import TranscriptionError, extract_voice_file_id, transcribe_voice
 from src.config import settings
@@ -197,8 +198,8 @@ async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_
     await sender.send_message(
         settings.telegram_bot_token,
         job.chat_id,
-        "Оцените, пожалуйста, рендер:",
-        reply_markup=rate_render_keyboard(order.get("request_id", "")),
+        "Показать 3 реальные работы такого же типа? Это поможет представить результат.",
+        reply_markup=gallery_offer_keyboard(order.get("request_id", ""), pt),
     )
 
 
@@ -273,6 +274,61 @@ async def _resolve_voice_text(
     return True
 
 
+async def _send_gallery_works(job: Job, pg_pool, sender: TelegramSender, order_id: str, partition_type: str) -> None:
+    works = await postgres.pick_random_gallery_works(pg_pool, partition_type, limit=3)
+    if not works:
+        await sender.send_message(
+            settings.telegram_bot_token, job.chat_id,
+            "Скоро пополним базу реальными фотографиями этого типа.",
+        )
+    else:
+        for work in works:
+            photos = work.get("photos") or []
+            paths = [str(Path(settings.gallery_dir) / p["file_path"]) for p in photos]
+            caption = work.get("title") or "Реальная работа"
+            if len(paths) >= 2:
+                await sender.send_media_group(settings.telegram_bot_token, job.chat_id, paths, caption=caption)
+            elif len(paths) == 1:
+                await sender.send_photo(settings.telegram_bot_token, job.chat_id, paths[0], caption=caption)
+    
+    await sender.send_message(
+        settings.telegram_bot_token, job.chat_id,
+        "Оцените, пожалуйста, рендер:",
+        reply_markup=rate_render_keyboard(order_id),
+    )
+
+async def _handle_client_callback(job: Job, pg_pool, sender: TelegramSender) -> bool:
+    if not job.callback_data:
+        return False
+        
+    parts = job.callback_data.split(":")
+    action = parts[0]
+    
+    if action == "rate_render":
+        order_id = parts[1]
+        score = parts[2]
+        await postgres.insert_chat_message(pg_pool, job.chat_id, "user", f"Оценка рендера {order_id}: {score}")
+        return True
+        
+    if action == "gallery_show":
+        order_id = parts[1]
+        partition_type = parts[2]
+        allowed_types = {"fixed", "sliding_2", "sliding_3", "sliding_4"}
+        pt = partition_type if partition_type in allowed_types else "sliding_2"
+        await _send_gallery_works(job, pg_pool, sender, order_id, pt)
+        return True
+        
+    if action == "gallery_skip":
+        order_id = parts[1]
+        await sender.send_message(
+            settings.telegram_bot_token, job.chat_id,
+            "Оцените, пожалуйста, рендер:",
+            reply_markup=rate_render_keyboard(order_id),
+        )
+        return True
+        
+    return False
+
 async def process_client_job(
     job: Job,
     pg_pool,
@@ -290,6 +346,10 @@ async def process_client_job(
         await postgres.mark_update_status(pg_pool, job.update_id, "processing")
         if settings.send_typing_indicator:
             await sender.send_chat_action(settings.telegram_bot_token, job.chat_id)
+
+        if job.msg_type == "callback_query" and await _handle_client_callback(job, pg_pool, sender):
+            await postgres.mark_update_status(pg_pool, job.update_id, "completed")
+            return
 
         if job.msg_type == "command" and await _handle_client_command(job, pg_pool, sender):
             await postgres.mark_update_status(pg_pool, job.update_id, "completed")

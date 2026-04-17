@@ -37,7 +37,7 @@ async def test_send_render_result_uses_media_group():
 
     assert sender.media_groups
     assert "order1" in sender.media_groups[0][3]
-    assert sender.messages[-1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"].startswith("rate_render")
+    assert sender.messages[-1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"].startswith("gallery_show")
 
 
 @pytest.mark.asyncio

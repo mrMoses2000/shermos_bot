@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     ssl_key_path: str = "certs/webhook.key"
 
     renders_dir: str = "data/renders"
+    gallery_dir: str = "data/gallery"
+    gallery_photo_max_bytes: int = 8 * 1024 * 1024  # 8 MB
 
     postgres_host: str = "localhost"
     postgres_port: int = 5432

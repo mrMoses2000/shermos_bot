@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api import (
     routes_analytics,
     routes_clients,
+    routes_gallery,
     routes_measurements,
     routes_orders,
     routes_pricing,
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_clients.router)
     app.include_router(routes_measurements.router)
     app.include_router(routes_pricing.router)
+    app.include_router(routes_gallery.router)
     app.include_router(routes_analytics.router)
     app.include_router(routes_settings.router)
 
