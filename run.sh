@@ -15,6 +15,11 @@
 
 set -euo pipefail
 
+if [[ "${1:-}" == wa-bridge-* ]]; then
+    bash "$(dirname "$0")/scripts/wa_bridge.sh" "$@"
+    exit $?
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
