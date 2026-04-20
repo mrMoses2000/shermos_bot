@@ -92,12 +92,21 @@ cmd_wa_bridge_pair() {
         err "BRIDGE_SHARED_SECRET not found in .env"
         exit 1
     fi
-    
-    log "Requesting pairing code for $1..."
+
+    PHONE="$1"
+    PAYLOAD=$(python3 - "$PHONE" <<'PY'
+import json
+import sys
+
+print(json.dumps({"phone": sys.argv[1]}))
+PY
+)
+
+    log "Requesting pairing code for $PHONE..."
     curl -s -X POST http://localhost:3001/pair \
         -H "X-Bridge-Secret: $SECRET" \
         -H "Content-Type: application/json" \
-        -d "{\"phone\":\"$1\"}"
+        -d "$PAYLOAD"
     echo ""
 }
 
@@ -114,42 +123,51 @@ cmd_wa_bridge_send_test() {
         exit 1
     fi
 
+    PHONE="$1"
+    TEXT="$2"
     UUID=$(python3 -c 'import uuid; print(uuid.uuid4())')
-    
-    log "Sending test message to $1..."
+    PAYLOAD=$(python3 - "$PHONE" "$UUID" "$TEXT" <<'PY'
+import json
+import sys
+
+print(json.dumps({"to": sys.argv[1], "idempotency_key": sys.argv[2], "text": sys.argv[3]}, ensure_ascii=False))
+PY
+)
+
+    log "Sending test message to $PHONE..."
     curl -s -X POST http://localhost:3001/send \
         -H "X-Bridge-Secret: $SECRET" \
         -H "Content-Type: application/json" \
-        -d "{\"to\":\"$1\", \"idempotency_key\":\"$UUID\", \"text\":\"$2\"}"
+        -d "$PAYLOAD"
     echo ""
 }
 
 cmd_wa_bridge_server_preflight() {
     step "WhatsApp Bridge Server Preflight"
-    
+
     log "OS Info:"
     cat /etc/os-release | grep -E '^(NAME|VERSION)=' || true
-    
+
     log "Versions:"
     command -v node &>/dev/null && node --version || echo "node not found"
     command -v npm &>/dev/null && npm --version || echo "npm not found"
     command -v pnpm &>/dev/null && pnpm --version || echo "pnpm not found"
     command -v docker &>/dev/null && docker --version || echo "docker not found"
     command -v cloudflared &>/dev/null && cloudflared --version || echo "cloudflared not found"
-    
+
     log "Port 3001 Check:"
     if command -v netstat &>/dev/null; then
         netstat -tuln | grep 3001 || echo "Port 3001 is free"
     else
         ss -tuln | grep 3001 || echo "Port 3001 is free"
     fi
-    
+
     log "Shermos Services Status:"
     systemctl list-units 'shermos-*' || true
-    
+
     log "Tunnel ExecStart:"
     cat /etc/systemd/system/shermos-tunnel.service 2>/dev/null | grep ExecStart || echo "Not found"
-    
+
     log "Docker Containers (Redis/Postgres):"
     if command -v docker &>/dev/null; then
         docker ps | grep -E 'redis|postgres' || echo "No redis/postgres containers running"

@@ -7,7 +7,7 @@ export const setupStatusRoute = () => {
   router.get('/', (req: Request, res: Response) => {
     const rawJid = state.sock?.user?.id;
     // Mask JID: e.g. "996555111222:4@s.whatsapp.net" -> "9965...net"
-    const maskedJid = rawJid 
+    const maskedJid = rawJid
       ? `${rawJid.split(':')[0].split('@')[0].substring(0, 4)}...net`
       : null;
 

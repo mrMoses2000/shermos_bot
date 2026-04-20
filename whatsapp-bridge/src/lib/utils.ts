@@ -8,17 +8,17 @@ export function safeCompare(a: string | undefined, b: string): boolean {
   if (typeof a !== 'string' || typeof b !== 'string' || b.length === 0) {
     return false;
   }
-  
+
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
-  
+
   if (bufA.length !== bufB.length) {
-    // Still do a dummy comparison to keep timing somewhat consistent, 
+    // Still do a dummy comparison to keep timing somewhat consistent,
     // though length difference is often leaked by other means.
     crypto.timingSafeEqual(bufA, bufA);
     return false;
   }
-  
+
   return crypto.timingSafeEqual(bufA, bufB);
 }
 

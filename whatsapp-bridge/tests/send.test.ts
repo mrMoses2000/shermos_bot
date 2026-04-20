@@ -85,7 +85,7 @@ describe('POST /send', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ message_id: 'msg123', status: 'sent' });
     expect(mockSock.sendMessage).toHaveBeenCalledWith('123456789@s.whatsapp.net', { text: 'hello' });
-    
+
     // Verify idempotency
     const cached = await redis.get(`bridge:idem:${payload.idempotency_key}`);
     expect(cached).toBeDefined();
@@ -95,7 +95,7 @@ describe('POST /send', () => {
       .post('/send')
       .set('x-bridge-secret', 'test_secret')
       .send(payload);
-    
+
     expect(response2.status).toBe(200);
     expect(mockSock.sendMessage).toHaveBeenCalledTimes(1); // Should NOT be called again
   });

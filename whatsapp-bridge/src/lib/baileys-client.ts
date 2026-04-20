@@ -213,10 +213,10 @@ export async function forwardToIngress(payload: any) {
 
 export async function processNextSpoolItem() {
   if (!state.redisClient) return false;
-  
+
   const item = await state.redisClient.rpop(SPOOL_KEY);
   if (!item) return false;
-  
+
   try {
     const payload = JSON.parse(item);
     const success = await forwardToIngress(payload);
@@ -231,9 +231,9 @@ let spoolProcessorRunning = false;
 export async function startSpoolProcessor() {
   if (spoolProcessorRunning || !state.redisClient) return;
   spoolProcessorRunning = true;
-  
+
   logger.info('Starting spool processor');
-  
+
   while (true) {
     try {
       const processed = await processNextSpoolItem();

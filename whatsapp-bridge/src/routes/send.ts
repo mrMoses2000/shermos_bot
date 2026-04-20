@@ -87,7 +87,7 @@ export const setupSendRoute = (redis: Redis) => {
         if (!isPathInsideAllowedDirs(fullPath, [mediaDir, renderDir])) {
           return res.status(403).json({ error: 'Forbidden: Media path not allowed' });
         }
-        
+
         try {
           await fs.access(fullPath);
         } catch {

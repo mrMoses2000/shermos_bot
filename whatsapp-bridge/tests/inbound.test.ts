@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { 
-  handleIncomingMessage, 
-  forwardToIngress, 
-  state, 
+import {
+  handleIncomingMessage,
+  forwardToIngress,
+  state,
   processNextSpoolItem
 } from '../src/lib/baileys-client.js';
 import RedisMock from 'ioredis-mock';
@@ -115,7 +115,7 @@ describe('Inbound Messaging', () => {
 
     const result = await processNextSpoolItem();
     expect(result).toBe(false);
-    
+
     // forwardToIngress should have re-spooled it
     const spooled = await redis.lrange('bridge:spool:inbound', 0, -1);
     expect(spooled.length).toBe(1);
