@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import Redis from 'ioredis';
 import pino from 'pino';
-import { createBaileysClient, sock } from './lib/baileys-client.js';
+import { createBaileysClient, state } from './lib/baileys-client.js';
 import { setupSendRoute } from './routes/send.js';
 import { setupPairRoute } from './routes/pair.js';
 import { setupStatusRoute } from './routes/status.js';
@@ -28,7 +28,7 @@ const server = app.listen(port, async () => {
 process.on('SIGTERM', async () => {
   logger.info('SIGTERM received, shutting down gracefully');
   server.close();
-  if (sock) sock.ws.close();
+  if (state.sock) state.sock.ws.close();
   await redis.quit();
   process.exit(0);
 });

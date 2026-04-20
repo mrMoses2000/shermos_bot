@@ -6,21 +6,28 @@ import pino from 'pino';
 import fs from 'fs/promises';
 import path from 'path';
 import { createWriteStream } from 'fs';
+import { extractTimestamp } from './utils.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const ingressUrl = process.env.INGRESS_URL || 'http://localhost:9443/internal/whatsapp/inbound';
 const bridgeSecret = process.env.BRIDGE_SHARED_SECRET || '';
 const mediaDir = process.env.MEDIA_DIR || '/data/incoming';
+const SPOOL_KEY = 'bridge:spool:inbound';
 
-export let sock: ReturnType<typeof makeWASocket>;
+export const state = {
+  sock: null as ReturnType<typeof makeWASocket> | null,
+  redisClient: null as Redis | null,
+  forwardDelays: [200, 1000, 5000],
+};
 
 export const createBaileysClient = async (redis: Redis) => {
+  state.redisClient = redis;
   const prefix = process.env.BAILEYS_AUTH_PREFIX || 'baileys:auth:';
-  const { state, saveCreds } = await useRedisAuthState(redis, prefix);
+  const { state: authState, saveCreds } = await useRedisAuthState(redis, prefix);
 
   const connect = () => {
-    sock = makeWASocket({
-      auth: state,
+    state.sock = makeWASocket({
+      auth: authState,
       printQRInTerminal: false,
       logger: logger.child({ module: 'baileys' }) as any,
       browser: ['Shermos', 'Chrome', '1.0'],
@@ -28,7 +35,7 @@ export const createBaileysClient = async (redis: Redis) => {
 
     let reconnectAttempts = 0;
 
-    sock.ev.on('connection.update', (update) => {
+    state.sock.ev.on('connection.update', (update) => {
       const { connection, lastDisconnect } = update;
       if (connection === 'close') {
         const error = lastDisconnect?.error as Boom;
@@ -45,12 +52,14 @@ export const createBaileysClient = async (redis: Redis) => {
       } else if (connection === 'open') {
         logger.info('WhatsApp connection opened');
         reconnectAttempts = 0;
+        // Start spool processor on connection
+        startSpoolProcessor();
       }
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    state.sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('messages.upsert', async (event) => {
+    state.sock.ev.on('messages.upsert', async (event) => {
       if (event.type !== 'notify') return;
 
       for (const m of event.messages) {
@@ -66,10 +75,10 @@ export const createBaileysClient = async (redis: Redis) => {
   };
 
   connect();
-  return sock;
+  return state.sock;
 };
 
-const handleIncomingMessage = async (m: WAMessage) => {
+export const handleIncomingMessage = async (m: WAMessage) => {
   if (!m.message) return;
 
   const messageType = getContentType(m.message);
@@ -117,50 +126,58 @@ const handleIncomingMessage = async (m: WAMessage) => {
   }
 
   // Handle media download
-  if (['image', 'voice', 'document'].includes(msg_type)) {
-    const ext = media_mime?.split('/')[1]?.split(';')[0] || 'bin';
-    const filename = `${m.key.id}.${ext}`;
-    const fullPath = path.join(mediaDir, filename);
+  if (['image', 'voice', 'document'].includes(msg_type) && state.sock) {
+    try {
+      const ext = media_mime?.split('/')[1]?.split(';')[0] || 'bin';
+      const filename = `${m.key.id}.${ext}`;
+      const fullPath = path.join(mediaDir, filename);
 
-    await fs.mkdir(mediaDir, { recursive: true });
+      await fs.mkdir(mediaDir, { recursive: true });
 
-    const stream = (await downloadMediaMessage(
-      m,
-      'stream',
-      {},
-      { logger: logger as any, reuploadRequest: sock.updateMediaMessage }
-    )) as any;
+      const stream = (await downloadMediaMessage(
+        m,
+        'stream',
+        {},
+        { logger: logger as any, reuploadRequest: state.sock.updateMediaMessage }
+      )) as any;
 
-    const writeStream = createWriteStream(fullPath);
-    await new Promise((resolve, reject) => {
-      stream.pipe(writeStream);
-      stream.on('end', resolve);
-      stream.on('error', reject);
-    });
+      const writeStream = createWriteStream(fullPath);
+      await new Promise((resolve, reject) => {
+        stream.pipe(writeStream);
+        stream.on('finish', resolve);
+        stream.on('error', reject);
+      });
 
-    media_path = fullPath;
+      media_path = fullPath;
+    } catch (err) {
+      logger.error({ err, msgId: m.key.id }, 'Failed to download media');
+    }
   }
 
   const jid = m.key.remoteJid!;
-  const chatId = parseInt(jid.split('@')[0], 10);
+  const phoneE164 = jid.split('@')[0];
 
   const payload = {
     external_id: m.key.id,
-    chat_id: chatId,
-    user_id: chatId,
+    external_chat_id: jid,
+    jid: jid,
+    phone_e164: phoneE164,
     text: text,
     msg_type,
     callback_data,
     media_path,
     media_mime,
     raw: m,
-    received_at: new Date((m.messageTimestamp as number) * 1000).toISOString(),
+    received_at: new Date(extractTimestamp(m) * 1000).toISOString(),
   };
 
-  // POST to ingress with retries
+  await forwardToIngress(payload);
+};
+
+export async function forwardToIngress(payload: any) {
   let attempts = 0;
   const maxAttempts = 3;
-  const delays = [200, 1000, 5000];
+  const delays = state.forwardDelays;
 
   while (attempts < maxAttempts) {
     try {
@@ -174,17 +191,59 @@ const handleIncomingMessage = async (m: WAMessage) => {
       });
 
       if (response.ok) {
-        logger.info({ msgId: m.key.id }, 'Message forwarded to ingress');
-        return;
+        logger.info({ msgId: payload.external_id }, 'Message forwarded to ingress');
+        return true;
       }
       throw new Error(`HTTP ${response.status}`);
     } catch (err) {
       attempts++;
       if (attempts >= maxAttempts) {
-        logger.error({ err, payload }, 'Failed to forward message to ingress after 3 attempts');
+        logger.warn({ err, msgId: payload.external_id }, 'Failed to forward to ingress, spooling...');
+        if (state.redisClient) {
+          await state.redisClient.lpush(SPOOL_KEY, JSON.stringify(payload));
+        }
+        return false;
       } else {
         await new Promise((res) => setTimeout(res, delays[attempts - 1]));
       }
     }
   }
-};
+  return false;
+}
+
+export async function processNextSpoolItem() {
+  if (!state.redisClient) return false;
+  
+  const item = await state.redisClient.rpop(SPOOL_KEY);
+  if (!item) return false;
+  
+  try {
+    const payload = JSON.parse(item);
+    const success = await forwardToIngress(payload);
+    return success;
+  } catch (err) {
+    logger.error({ err }, 'Failed to process spooled item');
+    return false;
+  }
+}
+
+let spoolProcessorRunning = false;
+export async function startSpoolProcessor() {
+  if (spoolProcessorRunning || !state.redisClient) return;
+  spoolProcessorRunning = true;
+  
+  logger.info('Starting spool processor');
+  
+  while (true) {
+    try {
+      const processed = await processNextSpoolItem();
+      if (!processed) {
+        // Wait a bit if no items were processed or forward failed (it re-spooled)
+        await new Promise(res => setTimeout(res, 10000));
+      }
+    } catch (err) {
+      logger.error({ err }, 'Spool processor loop error');
+      await new Promise(res => setTimeout(res, 5000));
+    }
+  }
+}
