@@ -20,6 +20,9 @@ from src.llm.tools_schema import get_tools_schema
 from src.utils.config_manager import config
 from src.utils.json_tools import ensure_json_object
 
+_HISTORY_LIMIT = 4
+_HISTORY_MESSAGE_MAX_CHARS = 280
+
 # Human-readable labels for render parameters
 _PARAM_LABELS = {
     "shape": "Форма перегородки (Прямая / Г-образная / П-образная)",
@@ -38,6 +41,13 @@ _PARAM_LABELS = {
     "handle_wall": "На какой стороне ручка (front / side / left / right)",
     "handle_sections": "Номера секций с ручкой (например [2])",
 }
+
+
+def _compact_history_text(text: Any) -> str:
+    value = str(text or "").strip()
+    if len(value) <= _HISTORY_MESSAGE_MAX_CHARS:
+        return value
+    return value[:_HISTORY_MESSAGE_MAX_CHARS].rstrip() + "\n…"
 
 
 def _materials_section() -> str:
@@ -74,7 +84,9 @@ def _slots_section(available_slots: dict[str, list[str]] | None) -> str:
     lines = []
     for date, slots in available_slots.items():
         if slots:
-            lines.append(f"  {date}: {', '.join(slots)}")
+            shown = slots[:8]
+            suffix = f" и ещё {len(slots) - len(shown)} слотов" if len(slots) > len(shown) else ""
+            lines.append(f"  {date}: {', '.join(shown)}{suffix}")
         else:
             lines.append(f"  {date}: всё занято")
     if not lines:
@@ -90,12 +102,104 @@ def _collected_summary(state: dict[str, Any]) -> str:
     return format_summary(collected)
 
 
+def _measurement_section(state: dict[str, Any]) -> str:
+    collected = ensure_json_object(state.get("collected_params", {}))
+    values = {
+        "measurement_date": collected.get("measurement_date"),
+        "measurement_time": collected.get("measurement_time"),
+        "measurement_name": collected.get("measurement_name"),
+        "measurement_phone": collected.get("measurement_phone"),
+        "measurement_address": collected.get("measurement_address"),
+    }
+    if not any(values.values()) and state.get("mode") != "scheduling":
+        return "Запись на замер пока не собирается."
+
+    labels = {
+        "measurement_date": "Дата замера",
+        "measurement_time": "Время замера",
+        "measurement_name": "Имя для замера",
+        "measurement_phone": "Телефон для замера",
+        "measurement_address": "Адрес замера",
+    }
+    missing = [labels[key] for key, value in values.items() if not value]
+    lines = ["Состояние записи на замер:"]
+    for key, label in labels.items():
+        value = values.get(key)
+        if value:
+            lines.append(f"  - {label}: {value}")
+    if missing:
+        lines.append("Ещё нужно собрать:")
+        for item in missing:
+            lines.append(f"  - {item}")
+    return "\n".join(lines)
+
+
+def _memory_section(memory: dict[str, Any] | None) -> str:
+    if not memory:
+        return "Память диалога пока не накоплена."
+    facts = ensure_json_object(memory.get("facts_json", {}))
+    summary = str(memory.get("summary_text") or "").strip()
+    parts = []
+    if facts:
+        fact_lines = []
+        design_keys = (
+            "shape",
+            "shape_side",
+            "height",
+            "width_a",
+            "width_b",
+            "width_c",
+            "partition_type",
+            "glass_type",
+            "frame_color",
+            "matting",
+            "add_handle",
+            "handle_wall",
+            "handle_sections",
+        )
+        design = {key: facts[key] for key in design_keys if key in facts}
+        if design:
+            fact_lines.append(
+                "- параметры: "
+                + ", ".join(f"{key}={value}" for key, value in design.items())
+            )
+        if facts.get("current_order_request_id"):
+            fact_lines.append(f"- текущий заказ: {facts['current_order_request_id']}")
+        if facts.get("current_order_status"):
+            fact_lines.append(f"- статус заказа: {facts['current_order_status']}")
+        profile = ensure_json_object(facts.get("client_profile", {}))
+        if profile:
+            profile_text = ", ".join(f"{key}: {value}" for key, value in profile.items())
+            fact_lines.append(f"- профиль клиента: {profile_text}")
+        if fact_lines:
+            parts.append("Структурные факты памяти:\n" + "\n".join(fact_lines))
+    if summary:
+        parts.append("Краткая выдержка старого диалога:\n" + summary)
+    return "\n\n".join(parts) if parts else "Память диалога пока не накоплена."
+
+
+def _order_context_section(state: dict[str, Any]) -> str:
+    collected = ensure_json_object(state.get("collected_params", {}))
+    rendered_order_id = str(collected.get("_rendered_order_id") or "").strip()
+    if not rendered_order_id:
+        return "Текущий 3D-заказ ещё не создан."
+    return (
+        "Текущий 3D-заказ уже создан и привязан к диалогу:\n"
+        f"  - order_request_id: {rendered_order_id}\n"
+        "Если клиент ИЗМЕНИЛ параметры перегородки, ОБЯЗАТЕЛЬНО вызови render_partition снова для перерасчета. "
+        "В противном случае НЕ вызывай render_partition повторно. "
+        "Можно свободно отвечать на вопросы клиента и собирать запись на замер. "
+        "Если клиент явно отменяет заказ, вызови cancel_order."
+    )
+
+
 def build_prompt(
     user_message: str,
     client_profile: dict[str, Any] | None,
     conversation_state: dict[str, Any] | None,
     chat_messages: list[dict[str, Any]],
     available_slots: dict[str, list[str]] | None = None,
+    conversation_memory: dict[str, Any] | None = None,
 ) -> str:
     profile_text = "Новый клиент — имя/телефон неизвестны."
     if client_profile:
@@ -107,46 +211,32 @@ def build_prompt(
     state = conversation_state or {"mode": "idle", "step": None, "collected_params": {}}
     state["collected_params"] = ensure_json_object(state.get("collected_params", {}))
     history_lines = []
-    for message in chat_messages:
+    for message in chat_messages[-_HISTORY_LIMIT:]:
         role = "Клиент" if message.get("role") == "user" else "Ассистент"
-        history_lines.append(f"{role}: {message.get('text', '')}")
+        history_lines.append(f"{role}: {_compact_history_text(message.get('text', ''))}")
 
-    return f"""Ты — умный консультант компании Shermos по стеклянным перегородкам.
-Твоя задача: вести диалог с клиентом в Telegram, собирая параметры для 3D-визуализации.
+    return f"""Ты — консультант Shermos по стеклянным перегородкам.
+Веди диалог в мессенджере, собирай параметры для 3D-визуализации и записи на замер.
 
 ═══ ПРАВИЛА ═══
 
-1. ЯЗЫК: всегда отвечай на русском.
-2. ФОРМАТ: Telegram HTML (<b>, <i>, \\n). НИКОГДА markdown.
-3. ВЫХОД: ТОЛЬКО валидный JSON. Без ```json```, без текста вокруг.
-4. ДЛИНА: reply_text — макс. 300 слов. Будь кратким и конкретным.
-5. ВОПРОСЫ: задавай 1-2 вопроса за раз, не больше. Не перегружай клиента.
-6. НЕ ВЫДУМЫВАЙ: если клиент не назвал параметр — спроси. Не подставляй случайные значения.
-7. УМНЫЕ ПОДСКАЗКИ: предлагай популярные варианты. Например: «Чаще всего берут прозрачное стекло (тип 1) и белый профиль (цвет 1)».
+Русский язык. reply_text: HTML (<b>, <i>, \\n), без markdown.
+Ответ: ТОЛЬКО валидный JSON, без ```json``` и текста вокруг.
+Максимум 300 слов, 1-2 вопроса за раз.
+Не выдумывай отсутствующие параметры. Популярные варианты можно предлагать, но сохраняй только выбранное клиентом.
 
 ═══ СТРАТЕГИЯ ДИАЛОГА ═══
 
-Шаг 1 (idle → collecting): Спроси форму перегородки и общие размеры.
-  Пример: «Какую форму перегородки хотите? Прямая стена, Г-образный угол, или П-образная ниша?»
-
-Шаг 2 (collecting): Спроси тип стекла и цвет профиля.
-  Покажи варианты списком. Предложи популярный вариант.
-
-Шаг 3 (collecting): Уточни секции (rows/cols) и ручку.
-  Обязательно спроси: «Нужна ли дверная ручка?»
-  Разумные дефолты для секций: rows=1, cols=2. Для сложных форм обязательно предложи клиенту задать секции отдельно по сторонам.
-  Пример: «На основной стене сколько секций? На боковых нужны деления или оставить цельным стеклом?»
-  Если ручка нужна, обязательно спроси номер секции для ручки, а для Г- и П-образной ещё сторону ручки.
-
-Шаг 4 (confirming): Когда всё собрано — покажи резюме и спроси: «Рендерить?»
-
-Шаг 5 (rendering): После подтверждения клиента — вызови render_partition.
-
-ВАЖНО: Если клиент даёт несколько параметров сразу — бери все. Не переспрашивай то, что уже сказано.
-ВАЖНО: Если клиент хочет записаться на замер вместо рендера — переключись на schedule_measurement.
-Для замера обязательно собери адрес, имя, телефон, дату и время. Без адреса не вызывай schedule_measurement.
-Правила замеров: рабочее окно 09:00–19:00, воскресенье выходной, время можно предлагать с шагом 15 минут. Система не даст поставить замер, если рядом есть активный замер ближе 45 минут по времени старта.
-ВАЖНО: state_patch ОБЯЗАТЕЛЕН в КАЖДОМ ответе, чтобы сохранять прогресс.
+1. Собери форму и размеры: Прямая, Г-образная, П-образная.
+2. Собери стекло, цвет профиля, матировку.
+3. Собери секции и ручку. Для Г/П формы уточняй секции и сторону ручки по стенам.
+4. Когда всё собрано — покажи резюме и спроси «Рендерить?».
+5. render_partition вызывай только после явного подтверждения.
+Если клиент дал несколько параметров сразу — сохрани все, не переспрашивай.
+Если есть _rendered_order_id и клиент ИЗМЕНИЛ параметры — ОБЯЗАТЕЛЬНО вызови render_partition снова. Иначе НЕ вызывай render_partition.
+Для замера собери только явно подтверждённые measurement_date, measurement_time, measurement_name, measurement_phone, measurement_address.
+schedule_measurement вызывай только когда все пять measurement_* есть в state_patch.collected_params. Рабочее время 09:00-19:00, воскресенье выходной, шаг 15 минут.
+state_patch обязателен в каждом ответе и должен сохранять старые + новые параметры.
 
 ═══ ДОСТУПНЫЕ МАТЕРИАЛЫ ═══
 
@@ -156,11 +246,9 @@ def build_prompt(
 Для Г-образной формы обязательно сохрани shape_side: "left", если боковая сторона слева, или "right", если справа.
 Для П-образной формы используй width_a как основную/центральную стену, width_b как левую боковую, width_c как правую боковую.
 Типы перегородок: fixed (стационарная), sliding_2, sliding_3, sliding_4.
-Матировка: none, matting_solid, matting_stripes, matting_logo. Сложный рисунок вставок: complex_pattern=true.
-Ручки: add_handle true/false, стиль Современный / Классический, позиция Лево / Центр / Право, handle_sections=[номер секции]. Для сложных форм также укажи handle_wall.
-Секции по сторонам: cols_front/rows_front для основной стены, cols_side/rows_side для боковой Г-образной, cols_left/rows_left и cols_right/rows_right для П-образной. Если на стороне не нужны деления, ставь cols_* = 1 и rows_* = 1.
-Если клиент говорит «на главной 4 секции, по бокам без делений»: для П-образной ставь cols_front=4, cols_left=1, cols_right=1; для Г-образной ставь cols_front=4, cols_side=1.
-Нумерация секций: на основной/front стене считаем слева направо, если стоять перед перегородкой. На боковых стенах считаем от угла соединения с основной стеной наружу.
+Матировка: none, matting_solid, matting_stripes, matting_logo.
+Ручки: add_handle true/false, handle_sections=[номер секции]; для Г/П формы также handle_wall.
+Секции по сторонам: cols_front/rows_front, cols_side/rows_side, cols_left/rows_left, cols_right/rows_right. Если делений нет: cols_*=1, rows_*=1.
 
 ═══ ДЕЙСТВИЯ (actions) ═══
 
@@ -172,10 +260,11 @@ def build_prompt(
 {{
   "reply_text": "Текст ответа клиенту в Telegram HTML",
   "actions": {{
-    "render_partition": {{ ... все параметры ... }} | null,
+    "render_partition": {{ ... }} | null,
     "schedule_measurement": {{ ... }} | null,
     "update_client_profile": {{ ... }} | null,
-    "state_patch": {{ "mode": "...", "step": "текущий_шаг", "collected_params": {{ ... все собранные параметры ... }} }} | null
+    "cancel_order": true | null,
+    "state_patch": {{ "mode": "...", "step": "...", "collected_params": {{ ... }} }} | null
   }}
 }}
 
@@ -186,7 +275,15 @@ def build_prompt(
 
 {_collected_summary(state)}
 
+{_measurement_section(state)}
+
+{_order_context_section(state)}
+
 {_missing_params_section(state)}
+
+═══ ПАМЯТЬ ДИАЛОГА ═══
+
+{_memory_section(conversation_memory)}
 
 ═══ ПРОФИЛЬ КЛИЕНТА ═══
 
@@ -198,7 +295,7 @@ def build_prompt(
 
 ═══ ИСТОРИЯ ДИАЛОГА (последние сообщения) ═══
 
-{chr(10).join(history_lines[-20:]) if history_lines else "(Новый диалог — поприветствуй клиента!)"}
+{chr(10).join(history_lines) if history_lines else "(Новый диалог — поприветствуй клиента!)"}
 
 ═══ СООБЩЕНИЕ КЛИЕНТА ═══
 

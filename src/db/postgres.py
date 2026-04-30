@@ -117,6 +117,26 @@ async def mark_update_received(pool, update_id: int) -> bool:
     return row is not None
 
 
+async def mark_external_update_received(
+    pool,
+    channel: str,
+    external_update_id: str,
+    synthetic_update_id: int,
+) -> bool:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO processed_updates (telegram_update_id, channel, external_update_id, status)
+        VALUES ($1, $2, $3, 'received')
+        ON CONFLICT DO NOTHING
+        RETURNING telegram_update_id
+        """,
+        synthetic_update_id,
+        channel,
+        external_update_id,
+    )
+    return row is not None
+
+
 async def get_update_status(pool, update_id: int) -> str | None:
     row = await pool.fetchrow(
         "SELECT status FROM processed_updates WHERE telegram_update_id=$1",
@@ -140,19 +160,64 @@ async def mark_update_status(pool, update_id: int, status: str, error: str | Non
     )
 
 
-async def insert_inbound_event(pool, update_id: int, chat_id: int, user_id: int, text: str, raw_update: dict) -> int:
+async def insert_inbound_event(
+    pool,
+    update_id: int,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    raw_update: dict,
+    *,
+    channel: str = "telegram",
+    external_message_id: str | None = None,
+    external_chat_id: str | None = None,
+    phone_e164: str | None = None,
+    media_path: str | None = None,
+    media_mime: str | None = None,
+) -> int:
     return await pool.fetchval(
         """
-        INSERT INTO inbound_events (telegram_update_id, chat_id, user_id, text, raw_update)
-        VALUES ($1, $2, $3, $4, $5::jsonb)
+        INSERT INTO inbound_events (
+            telegram_update_id,
+            chat_id,
+            user_id,
+            text,
+            raw_update,
+            channel,
+            external_message_id,
+            external_chat_id,
+            phone_e164,
+            media_path,
+            media_mime
+        )
+        VALUES ($1, $2, $3, $4, $11::jsonb, $5, $6, $7, $8, $9, $10)
         RETURNING id
         """,
         update_id,
         chat_id,
         user_id,
         text or "",
+        channel,
+        external_message_id,
+        external_chat_id,
+        phone_e164,
+        media_path,
+        media_mime,
         _json(raw_update),
     )
+
+
+async def get_last_inbound_event(pool, chat_id: int) -> dict[str, Any] | None:
+    row = await pool.fetchrow(
+        """
+        SELECT * FROM inbound_events
+        WHERE chat_id=$1
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        chat_id,
+    )
+    return _row_to_dict(row) if row else None
 
 
 async def insert_outbound_event(
@@ -162,11 +227,23 @@ async def insert_outbound_event(
     reply_markup: dict | None = None,
     inbound_event_id: int | None = None,
     bot_type: str = "client",
+    channel: str = "telegram",
+    external_chat_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> int:
     return await pool.fetchval(
         """
-        INSERT INTO outbound_events (chat_id, bot_type, reply_text, reply_markup, inbound_event_id)
-        VALUES ($1, $2, $3, $4::jsonb, $5)
+        INSERT INTO outbound_events (
+            chat_id,
+            bot_type,
+            reply_text,
+            reply_markup,
+            inbound_event_id,
+            channel,
+            external_chat_id,
+            idempotency_key
+        )
+        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
         RETURNING id
         """,
         chat_id,
@@ -174,21 +251,31 @@ async def insert_outbound_event(
         reply_text or "",
         _json(reply_markup) if reply_markup is not None else None,
         inbound_event_id,
+        channel,
+        external_chat_id,
+        idempotency_key,
     )
 
 
-async def mark_outbound_sent(pool, event_id: int, telegram_message_id: int | None = None) -> None:
+async def mark_outbound_sent(
+    pool,
+    event_id: int,
+    telegram_message_id: int | None = None,
+    external_message_id: str | None = None,
+) -> None:
     await pool.execute(
         """
         UPDATE outbound_events
         SET status='sent',
             sent_at=now(),
             telegram_message_id=$2,
+            external_message_id=COALESCE($3, external_message_id),
             error_message=NULL
         WHERE id=$1
         """,
         event_id,
         telegram_message_id,
+        external_message_id,
     )
 
 
@@ -212,7 +299,7 @@ async def get_pending_outbound(pool, limit: int = 20) -> list[dict[str, Any]]:
         """
         SELECT *
         FROM outbound_events
-        WHERE status='pending' AND attempts < 5
+        WHERE status='pending' AND attempts < 5 AND created_at < now() - interval '15 seconds'
         ORDER BY created_at
         LIMIT $1
         """,
@@ -284,6 +371,71 @@ async def clear_chat_messages(pool, chat_id: int) -> None:
     await pool.execute("DELETE FROM chat_messages WHERE chat_id=$1", chat_id)
 
 
+async def get_conversation_memory(pool, chat_id: int) -> dict[str, Any] | None:
+    row = await pool.fetchrow("SELECT * FROM conversation_memory WHERE chat_id=$1", chat_id)
+    return _row_to_dict(row, object_fields=("facts_json",))
+
+
+async def upsert_conversation_memory(
+    pool,
+    chat_id: int,
+    summary_text: str,
+    facts_json: dict | None,
+    summarized_until_message_id: int,
+) -> dict[str, Any]:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO conversation_memory (
+            chat_id,
+            summary_text,
+            facts_json,
+            summarized_until_message_id,
+            updated_at
+        )
+        VALUES ($1, $2, $3::jsonb, $4, now())
+        ON CONFLICT (chat_id) DO UPDATE
+        SET summary_text=EXCLUDED.summary_text,
+            facts_json=EXCLUDED.facts_json,
+            summarized_until_message_id=GREATEST(
+                conversation_memory.summarized_until_message_id,
+                EXCLUDED.summarized_until_message_id
+            ),
+            updated_at=now()
+        RETURNING *
+        """,
+        chat_id,
+        summary_text or "",
+        ensure_json_object(facts_json),
+        summarized_until_message_id,
+    )
+    return _row_to_dict(row, object_fields=("facts_json",)) or {}
+
+
+async def delete_conversation_memory(pool, chat_id: int) -> None:
+    await pool.execute("DELETE FROM conversation_memory WHERE chat_id=$1", chat_id)
+
+
+async def get_chat_messages_after(
+    pool,
+    chat_id: int,
+    after_message_id: int = 0,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    rows = await pool.fetch(
+        """
+        SELECT *
+        FROM chat_messages
+        WHERE chat_id=$1 AND id > $2
+        ORDER BY id ASC
+        LIMIT $3
+        """,
+        chat_id,
+        after_message_id,
+        limit,
+    )
+    return _rows_to_dicts(rows)
+
+
 async def get_active_order_draft(pool, chat_id: int) -> dict[str, Any] | None:
     row = await pool.fetchrow(
         """
@@ -296,6 +448,32 @@ async def get_active_order_draft(pool, chat_id: int) -> dict[str, Any] | None:
         chat_id,
     )
     return _row_to_dict(row, object_fields=("collected_params",))
+
+
+async def get_rendered_order_draft(pool, chat_id: int) -> dict[str, Any] | None:
+    row = await pool.fetchrow(
+        """
+        SELECT
+            d.*,
+            o.status AS order_status,
+            o.details_json,
+            o.render_paths,
+            o.price
+        FROM order_drafts d
+        JOIN orders o ON o.request_id = d.rendered_order_id
+        WHERE d.chat_id=$1
+          AND d.status='rendered'
+          AND d.rendered_order_id IS NOT NULL
+          AND o.status NOT IN ('cancelled', 'completed')
+        ORDER BY d.updated_at DESC
+        LIMIT 1
+        """,
+        chat_id,
+    )
+    return _row_to_dict(
+        row,
+        object_fields=("collected_params", "details_json", "render_paths", "price"),
+    )
 
 
 async def upsert_order_draft(
@@ -340,6 +518,44 @@ async def upsert_order_draft(
         request_id or str(uuid4()),
     )
     return _row_to_dict(row, object_fields=("collected_params",)) or {}
+
+
+async def abandon_current_order_draft(pool, chat_id: int, cancel_order: bool = True) -> dict[str, Any] | None:
+    row = await pool.fetchrow(
+        """
+        SELECT request_id, rendered_order_id
+        FROM order_drafts
+        WHERE chat_id=$1
+          AND status IN ('collecting', 'confirming', 'rendering', 'rendered')
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        chat_id,
+    )
+    if row is None:
+        return None
+    draft = dict(row)
+    await pool.execute(
+        """
+        UPDATE order_drafts
+        SET status='abandoned',
+            updated_at=now()
+        WHERE request_id=$1
+        """,
+        draft["request_id"],
+    )
+    if cancel_order and draft.get("rendered_order_id"):
+        await pool.execute(
+            """
+            UPDATE orders
+            SET status='cancelled',
+                updated_at=now()
+            WHERE request_id=$1
+              AND status NOT IN ('cancelled', 'completed')
+            """,
+            draft["rendered_order_id"],
+        )
+    return draft
 
 
 async def mark_active_order_draft_rendered(pool, chat_id: int, order_request_id: str) -> None:
