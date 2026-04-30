@@ -6,17 +6,20 @@ import asyncio
 from typing import Any
 
 from datetime import datetime, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from src.bot.keyboards import gallery_offer_keyboard, manager_measurement_keyboard, open_mini_app_keyboard, rate_render_keyboard
 from pathlib import Path
 from src.bot.telegram_sender import TelegramSender, telegram_sender
 from src.bot.transcribe import TranscriptionError, extract_voice_file_id, transcribe_voice
+from src.bot.whatsapp_sender import WhatsAppSender, manager_whatsapp_sender, whatsapp_sender
 from src.config import settings
 from src.db import postgres
 from src.db.redis_client import RedisClient
 from src.llm.actions_applier import apply_actions
 from src.llm.actions_parser import parse_actions
+from src.llm.conversation_memory import refresh_conversation_memory_if_needed
 from src.llm.executor import call_llm
 from src.llm.health_check import run_gemini_health_check
 from src.llm.prompt_builder import build_prompt
@@ -25,6 +28,32 @@ from src.queue.outbox_dispatcher import run_outbox_dispatcher
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+CLIENT_QUEUE = "queue:incoming"
+CLIENT_PROCESSING_QUEUE = "queue:processing:client"
+CLIENT_DELAYED_QUEUE = "queue:delayed:incoming"
+MANAGER_QUEUE = "queue:manager"
+MANAGER_PROCESSING_QUEUE = "queue:processing:manager"
+CLIENT_LOCK_TTL_SECONDS = max(360, settings.llm_timeout_seconds + 240)
+
+
+def _lock_retry_delay(attempt: int) -> int:
+    return min(2 ** min(max(attempt, 0), 4), 15)
+
+
+async def _schedule_locked_client_job(redis_client: RedisClient, job: Job) -> None:
+    next_job = job.model_copy(update={"attempt": job.attempt + 1})
+    delay = _lock_retry_delay(job.attempt)
+    await redis_client.schedule_job(CLIENT_DELAYED_QUEUE, next_job, delay)
+    logger.info(
+        "client_job_delayed_by_lock",
+        extra={
+            "chat_id": job.chat_id,
+            "update_id": job.update_id,
+            "attempt": job.attempt,
+            "delay_seconds": delay,
+        },
+    )
 
 
 async def _load_available_slots(pg_pool, days_ahead: int = 3) -> dict[str, list[str]]:
@@ -43,6 +72,21 @@ async def _load_available_slots(pg_pool, days_ahead: int = 3) -> dict[str, list[
         except Exception:
             slots[date_str] = []
     return slots
+
+
+async def _refresh_memory_best_effort(pg_pool, chat_id: int) -> None:
+    try:
+        await refresh_conversation_memory_if_needed(pg_pool, chat_id)
+    except Exception as exc:
+        logger.warning("conversation_memory_refresh_failed", extra={"chat_id": chat_id, "error": str(exc)})
+
+
+async def _get_memory_best_effort(pg_pool, chat_id: int) -> dict[str, Any] | None:
+    try:
+        return await postgres.get_conversation_memory(pg_pool, chat_id)
+    except Exception as exc:
+        logger.warning("conversation_memory_load_failed", extra={"chat_id": chat_id, "error": str(exc)})
+        return None
 
 
 CLIENT_COMMANDS = {
@@ -69,22 +113,47 @@ CLIENT_COMMANDS = {
 
 async def _send_and_record(
     pg_pool,
-    sender: TelegramSender,
+    sender: TelegramSender | WhatsAppSender,
     token: str,
-    chat_id: int,
+    chat_id: int | str,
     text: str,
     bot_type: str = "client",
     reply_markup: dict | None = None,
 ) -> None:
+    channel = getattr(sender, "channel", "telegram")
+    idempotency_key = str(uuid4()) if channel == "whatsapp" else None
+    event_kwargs: dict[str, Any] = {}
+    if channel != "telegram":
+        event_kwargs = {
+            "channel": channel,
+            "external_chat_id": str(chat_id),
+            "idempotency_key": idempotency_key,
+        }
+
     event_id = await postgres.insert_outbound_event(
         pg_pool,
-        chat_id=chat_id,
+        chat_id=int(chat_id),
         reply_text=text,
         reply_markup=reply_markup,
         bot_type=bot_type,
+        **event_kwargs,
     )
-    msg_id = await sender.send_message(token, chat_id, text, reply_markup=reply_markup)
-    await postgres.mark_outbound_sent(pg_pool, event_id, telegram_message_id=msg_id)
+    if channel == "whatsapp":
+        msg_id = await sender.send_message(
+            token,
+            chat_id,
+            text,
+            reply_markup=reply_markup,
+            idempotency_key=idempotency_key,
+        )
+        await postgres.mark_outbound_sent(
+            pg_pool,
+            event_id,
+            external_message_id=str(msg_id) if msg_id is not None else None,
+        )
+    else:
+        msg_id = await sender.send_message(token, int(chat_id), text, reply_markup=reply_markup)
+        await postgres.mark_outbound_sent(pg_pool, event_id, telegram_message_id=msg_id)
 
 
 def _telegram_user(job: Job) -> tuple[str, str]:
@@ -97,6 +166,11 @@ async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> b
     text = (job.text or "").split()[0].lower()
     if text == "/clear":
         await postgres.clear_chat_messages(pg_pool, job.chat_id)
+        try:
+            await postgres.delete_conversation_memory(pg_pool, job.chat_id)
+        except Exception as exc:
+            logger.warning("conversation_memory_delete_failed", extra={"chat_id": job.chat_id, "error": str(exc)})
+        await postgres.abandon_current_order_draft(pg_pool, job.chat_id, cancel_order=True)
         await postgres.upsert_conversation_state(pg_pool, job.chat_id, "idle", None, {})
         await _send_and_record(
             pg_pool,
@@ -104,6 +178,17 @@ async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> b
             settings.telegram_bot_token,
             job.chat_id,
             "История диалога очищена.",
+        )
+        return True
+    if text in {"/cancel", "/cancel_order"}:
+        await postgres.abandon_current_order_draft(pg_pool, job.chat_id, cancel_order=True)
+        await postgres.upsert_conversation_state(pg_pool, job.chat_id, "idle", None, {})
+        await _send_and_record(
+            pg_pool,
+            sender,
+            settings.telegram_bot_token,
+            job.chat_id,
+            "Текущий заказ отменён. Можно начать новый расчёт.",
         )
         return True
     if text == "/status":
@@ -221,14 +306,24 @@ async def _resolve_voice_text(
     Returns True when the job is ready to continue into the LLM pipeline,
     False when the message was rejected (user already notified, update marked).
     """
-    file_id = extract_voice_file_id(job.raw_update)
-    if not file_id:
-        await _send_and_record(
-            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
-            "Не удалось распознать голосовое сообщение. Отправьте, пожалуйста, текстом.",
-        )
-        await postgres.mark_update_status(pg_pool, job.update_id, "failed", "voice_no_file_id")
-        return False
+    file_id: str | None = None
+    if job.channel == "whatsapp":
+        if not job.media_path:
+            await _send_and_record(
+                pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+                "Не удалось получить голосовое сообщение. Отправьте, пожалуйста, текстом.",
+            )
+            await postgres.mark_update_status(pg_pool, job.update_id, "failed", "voice_no_media_path")
+            return False
+    else:
+        file_id = extract_voice_file_id(job.raw_update)
+        if not file_id:
+            await _send_and_record(
+                pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+                "Не удалось распознать голосовое сообщение. Отправьте, пожалуйста, текстом.",
+            )
+            await postgres.mark_update_status(pg_pool, job.update_id, "failed", "voice_no_file_id")
+            return False
 
     if not settings.assemblyai_api_key:
         await _send_and_record(
@@ -240,8 +335,11 @@ async def _resolve_voice_text(
 
     try:
         await sender.send_chat_action(settings.telegram_bot_token, job.chat_id, action="record_voice")
-        file_info = await sender.get_file(settings.telegram_bot_token, file_id)
-        audio_bytes = await sender.download_file(settings.telegram_bot_token, file_info["file_path"])
+        if job.channel == "whatsapp":
+            audio_bytes = await asyncio.to_thread(Path(job.media_path).read_bytes)
+        else:
+            file_info = await sender.get_file(settings.telegram_bot_token, file_id)
+            audio_bytes = await sender.download_file(settings.telegram_bot_token, file_info["file_path"])
         transcript = await transcribe_voice(audio_bytes)
     except TranscriptionError as exc:
         logger.warning("voice_transcription_failed", extra={"chat_id": job.chat_id, "error": str(exc)})
@@ -338,11 +436,12 @@ async def process_client_job(
     redis_client: RedisClient,
     sender: TelegramSender = telegram_sender,
 ) -> None:
-    locked = await redis_client.acquire_user_lock(job.chat_id, ttl=180)
+    if job.channel == "whatsapp":
+        sender = whatsapp_sender
+
+    locked = await redis_client.acquire_user_lock(job.chat_id, ttl=CLIENT_LOCK_TTL_SECONDS)
     if not locked:
-        if job.attempt < 5:
-            await asyncio.sleep(min(2**job.attempt, 30))
-            await redis_client.enqueue_job("queue:incoming", job.model_copy(update={"attempt": job.attempt + 1}))
+        await _schedule_locked_client_job(redis_client, job)
         return
 
     try:
@@ -373,11 +472,19 @@ async def process_client_job(
             client = await postgres.create_client(pg_pool, job.chat_id, first_name, username)
         state = await postgres.get_conversation_state(pg_pool, job.chat_id)
         history = await postgres.get_chat_messages(pg_pool, job.chat_id, settings.max_context_messages)
+        memory = await _get_memory_best_effort(pg_pool, job.chat_id)
 
         # Load available measurement slots for the next 3 days
         available_slots = await _load_available_slots(pg_pool)
 
-        prompt = build_prompt(job.text, client, state, history, available_slots=available_slots)
+        prompt = build_prompt(
+            job.text,
+            client,
+            state,
+            history,
+            available_slots=available_slots,
+            conversation_memory=memory,
+        )
         raw_llm = await call_llm(prompt)
         parsed = parse_actions(raw_llm)
         action_result = await apply_actions(parsed, job.chat_id, client, state, pg_pool, redis_client, settings)
@@ -392,15 +499,30 @@ async def process_client_job(
         await _send_render_result(job, pg_pool, sender, action_result)
         await postgres.insert_chat_message(pg_pool, job.chat_id, "user", job.text)
         await postgres.insert_chat_message(pg_pool, job.chat_id, "assistant", parsed.reply_text)
+        await _refresh_memory_best_effort(pg_pool, job.chat_id)
         await postgres.mark_update_status(pg_pool, job.update_id, "completed")
-    except TimeoutError as exc:
+    except ValueError as exc:
+        logger.info("client_job_validation_failed", extra={"update_id": job.update_id, "error": str(exc)})
         await _send_and_record(
             pg_pool,
             sender,
             settings.telegram_bot_token,
             job.chat_id,
-            "Запрос занял слишком много времени. Попробуйте еще раз.",
+            str(exc),
         )
+        await postgres.insert_chat_message(pg_pool, job.chat_id, "user", job.text)
+        await postgres.insert_chat_message(pg_pool, job.chat_id, "assistant", str(exc))
+        await _refresh_memory_best_effort(pg_pool, job.chat_id)
+        await postgres.mark_update_status(pg_pool, job.update_id, "completed")
+    except TimeoutError as exc:
+        timeout_reply = (
+            "Запрос занял слишком много времени. Я сохранил ваше сообщение. "
+            "Напишите «продолжи», и я продолжу с него."
+        )
+        await _send_and_record(pg_pool, sender, settings.telegram_bot_token, job.chat_id, timeout_reply)
+        await postgres.insert_chat_message(pg_pool, job.chat_id, "user", job.text)
+        await postgres.insert_chat_message(pg_pool, job.chat_id, "assistant", timeout_reply)
+        await _refresh_memory_best_effort(pg_pool, job.chat_id)
         await postgres.mark_update_status(pg_pool, job.update_id, "failed", str(exc))
     except Exception as exc:
         logger.exception("client_job_failed", extra={"update_id": job.update_id, "error": str(exc)})
@@ -570,19 +692,30 @@ async def _handle_manager_slot_proposal(
 async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, measurements: list[dict]) -> None:
     for measurement in measurements:
         m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
-        await _send_and_record(
-            pg_pool,
-            sender,
-            settings.telegram_bot_token,
-            measurement["client_chat_id"],
-            (
-                "<b>Ваш замер автоматически подтверждён.</b>\n\n"
-                f"Дата: <b>{m_time}</b>\n"
-                f"Адрес: {measurement.get('address', '—')}\n\n"
-                "Мастер не отклонил запись в течение 15 минут, поэтому время закреплено."
-            ),
-            bot_type="client",
-        )
+        
+        client_chat_id = measurement["client_chat_id"]
+        last_event = await postgres.get_last_inbound_event(pg_pool, client_chat_id)
+        is_whatsapp = last_event and last_event.get("channel") == "whatsapp"
+        client_sender = whatsapp_sender if is_whatsapp else sender
+        external_chat_id = last_event.get("external_chat_id") if is_whatsapp else client_chat_id
+
+        try:
+            await _send_and_record(
+                pg_pool,
+                client_sender,
+                settings.telegram_bot_token if not is_whatsapp else "",
+                external_chat_id,
+                (
+                    "<b>Ваш замер автоматически подтверждён.</b>\n\n"
+                    f"Дата: <b>{m_time}</b>\n"
+                    f"Адрес: {measurement.get('address', '—')}\n\n"
+                    "Мастер не отклонил запись в течение 15 минут, поэтому время закреплено."
+                ),
+                bot_type="client",
+            )
+        except Exception as exc:
+            logger.warning("auto_confirm_client_notify_failed", extra={"chat_id": client_chat_id, "error": str(exc)})
+
         for manager_chat_id in settings.manager_chat_ids_list:
             await _send_and_record(
                 pg_pool,
@@ -593,6 +726,22 @@ async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, m
                 bot_type="manager",
                 reply_markup=manager_measurement_keyboard(int(measurement["id"])),
             )
+        for manager_phone in settings.manager_whatsapp_numbers_list:
+            try:
+                await _send_and_record(
+                    pg_pool,
+                    manager_whatsapp_sender,
+                    "",
+                    manager_phone,
+                    f"Замер #{measurement['id']} на <b>{m_time}</b> автоматически подтверждён.",
+                    bot_type="manager",
+                    reply_markup=manager_measurement_keyboard(int(measurement["id"])),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "manager_whatsapp_auto_confirm_notify_failed",
+                    extra={"phone": manager_phone, "error": str(exc)},
+                )
 
 
 async def _measurement_auto_confirm_loop(pg_pool, sender: TelegramSender, interval_seconds: int = 60) -> None:
@@ -616,6 +765,9 @@ async def process_manager_job(
     redis_client: RedisClient,
     sender: TelegramSender = telegram_sender,
 ) -> None:
+    if job.channel == "whatsapp":
+        sender = manager_whatsapp_sender
+
     try:
         existing_status = await postgres.get_update_status(pg_pool, job.update_id)
         if existing_status in ("completed", "failed"):
@@ -697,12 +849,15 @@ async def process_manager_job(
 async def _client_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
     while True:
         try:
-            job = await redis_client.dequeue_job_safe("queue:incoming", "queue:processing:client", timeout=5)
+            moved = await redis_client.move_due_jobs(CLIENT_DELAYED_QUEUE, CLIENT_QUEUE, limit=100)
+            if moved:
+                logger.info("client_delayed_jobs_requeued", extra={"count": moved})
+            job = await redis_client.dequeue_job_safe(CLIENT_QUEUE, CLIENT_PROCESSING_QUEUE, timeout=5)
             if job is not None:
                 try:
                     await process_client_job(job, pg_pool, redis_client, sender)
                 finally:
-                    await redis_client.ack_job("queue:processing:client", job)
+                    await redis_client.ack_job(CLIENT_PROCESSING_QUEUE, job)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -713,12 +868,12 @@ async def _client_loop(pg_pool, redis_client: RedisClient, sender: TelegramSende
 async def _manager_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
     while True:
         try:
-            job = await redis_client.dequeue_job_safe("queue:manager", "queue:processing:manager", timeout=5)
+            job = await redis_client.dequeue_job_safe(MANAGER_QUEUE, MANAGER_PROCESSING_QUEUE, timeout=5)
             if job is not None:
                 try:
                     await process_manager_job(job, pg_pool, redis_client, sender)
                 finally:
-                    await redis_client.ack_job("queue:processing:manager", job)
+                    await redis_client.ack_job(MANAGER_PROCESSING_QUEUE, job)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -734,10 +889,12 @@ async def run_worker() -> None:
     redis_client = RedisClient(settings.redis_url)
     await redis_client.connect()
     await telegram_sender.start()
-    recovered = await redis_client.recover_stuck_jobs("queue:processing:client", "queue:incoming")
+    await whatsapp_sender.start()
+    await manager_whatsapp_sender.start()
+    recovered = await redis_client.recover_stuck_jobs(CLIENT_PROCESSING_QUEUE, CLIENT_QUEUE)
     if recovered:
         logger.info("recovered_stuck_jobs", extra={"count": recovered, "queue": "client"})
-    recovered_mgr = await redis_client.recover_stuck_jobs("queue:processing:manager", "queue:manager")
+    recovered_mgr = await redis_client.recover_stuck_jobs(MANAGER_PROCESSING_QUEUE, MANAGER_QUEUE)
     if recovered_mgr:
         logger.info("recovered_stuck_jobs", extra={"count": recovered_mgr, "queue": "manager"})
     tasks = [
@@ -754,4 +911,6 @@ async def run_worker() -> None:
             task.cancel()
         await redis_client.close()
         await telegram_sender.close()
+        await whatsapp_sender.close()
+        await manager_whatsapp_sender.close()
         await postgres.close_pool(pg_pool)
