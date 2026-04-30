@@ -299,7 +299,7 @@ async def get_pending_outbound(pool, limit: int = 20) -> list[dict[str, Any]]:
         """
         SELECT *
         FROM outbound_events
-        WHERE status='pending' AND attempts < 5
+        WHERE status='pending' AND attempts < 5 AND created_at < now() - interval '15 seconds'
         ORDER BY created_at
         LIMIT $1
         """,
