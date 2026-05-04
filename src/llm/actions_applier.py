@@ -264,8 +264,11 @@ async def apply_actions(
                                 ),
                                 bot_type="manager",
                             )
-                        except Exception:
-                            continue
+                        except Exception as exc:
+                            logger.error(
+                                "manager_telegram_notify_failed",
+                                extra={"chat_id": manager_chat_id, "kind": "new_order", "error": str(exc)},
+                            )
 
                     for manager_phone in getattr(settings, "manager_whatsapp_numbers_list", []):
                         try:
@@ -282,8 +285,11 @@ async def apply_actions(
                                 ),
                                 bot_type="manager",
                             )
-                        except Exception:
-                            continue
+                        except Exception as exc:
+                            logger.error(
+                                "manager_whatsapp_notify_failed",
+                                extra={"phone": manager_phone, "kind": "new_order", "error": str(exc)},
+                            )
 
     if actions.actions.get("schedule_measurement"):
         missing_measurement_fields = _missing_measurement_fields(merged_collected)
@@ -345,8 +351,11 @@ async def apply_actions(
                     bot_type="manager",
                     reply_markup=manager_measurement_keyboard(m_id),
                 )
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.error(
+                    "manager_telegram_notify_failed",
+                    extra={"chat_id": manager_chat_id, "kind": "new_measurement", "error": str(exc)},
+                )
 
         for manager_phone in getattr(settings, "manager_whatsapp_numbers_list", []):
             try:
@@ -368,8 +377,11 @@ async def apply_actions(
                     bot_type="manager",
                     reply_markup=manager_measurement_keyboard(m_id),
                 )
-            except Exception:
-                continue
+            except Exception as exc:
+                logger.error(
+                    "manager_whatsapp_notify_failed",
+                    extra={"phone": manager_phone, "kind": "new_measurement", "error": str(exc)},
+                )
 
     if actions.actions.get("state_patch"):
         patch = StatePatch(**actions.actions["state_patch"])

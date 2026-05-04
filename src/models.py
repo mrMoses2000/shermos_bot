@@ -25,6 +25,7 @@ class Job(BaseModel):
     attempt: int = 0
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     bot_type: str = "client"
+    bridge_role: Optional[str] = None
 
 
 class RenderPartitionAction(BaseModel):

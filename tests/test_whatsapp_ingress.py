@@ -18,6 +18,8 @@ class FakeRedis:
 async def test_enqueue_whatsapp_inbound_enqueues_channel_job(monkeypatch):
     calls = {}
     redis = FakeRedis()
+    # Ensure the test phone is not in the manager allowlist
+    monkeypatch.setattr(whatsapp_ingress.settings, "manager_whatsapp_numbers", "")
 
     async def mark_external_update_received(_pool, channel, external_update_id, synthetic_update_id):
         calls["dedup"] = (channel, external_update_id, synthetic_update_id)
@@ -102,33 +104,72 @@ async def test_enqueue_whatsapp_inbound_routes_allowlisted_manager(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_whatsapp_inbound_rejects_manager_not_allowlisted(monkeypatch):
+async def test_enqueue_whatsapp_inbound_client_on_manager_number(monkeypatch):
+    """Non-staff client writes to manager WA number → goes to queue:incoming, no error."""
+    redis = FakeRedis()
+    logged = []
+    monkeypatch.setattr(whatsapp_ingress.settings, "manager_whatsapp_numbers", "77067396626")
+
+    async def mark_external_update_received(*_args):
+        return True
+
+    async def insert_inbound_event(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr(whatsapp_ingress.postgres, "mark_external_update_received", mark_external_update_received)
+    monkeypatch.setattr(whatsapp_ingress.postgres, "insert_inbound_event", insert_inbound_event)
+
+    result = await whatsapp_ingress.enqueue_whatsapp_inbound(
+        object(),
+        redis,
+        {
+            "external_id": "wa-client-on-mgr",
+            "external_chat_id": "77060000000@s.whatsapp.net",
+            "phone_e164": "77060000000",
+            "bridge_role": "manager",
+            "text": "Хочу перегородку",
+        },
+    )
+
+    assert result["queued"] is True
+    queue_name, job = redis.jobs[0]
+    assert queue_name == "queue:incoming"
+    assert job.bot_type == "client"
+    assert job.bridge_role == "manager"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_whatsapp_inbound_staff_on_client_number(monkeypatch):
+    """Staff member writes on client WA number → goes to queue:manager (allowlist wins)."""
     redis = FakeRedis()
     monkeypatch.setattr(whatsapp_ingress.settings, "manager_whatsapp_numbers", "77067396626")
 
     async def mark_external_update_received(*_args):
-        raise AssertionError("forbidden manager should not hit dedup")
+        return True
 
-    monkeypatch.setattr(
-        whatsapp_ingress.postgres,
-        "mark_external_update_received",
-        mark_external_update_received,
+    async def insert_inbound_event(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr(whatsapp_ingress.postgres, "mark_external_update_received", mark_external_update_received)
+    monkeypatch.setattr(whatsapp_ingress.postgres, "insert_inbound_event", insert_inbound_event)
+
+    result = await whatsapp_ingress.enqueue_whatsapp_inbound(
+        object(),
+        redis,
+        {
+            "external_id": "wa-staff-on-client",
+            "external_chat_id": "77067396626@s.whatsapp.net",
+            "phone_e164": "+7-706-739-66-26",
+            "bridge_role": "client",
+            "text": "Подтверждаю замер",
+        },
     )
 
-    with pytest.raises(PermissionError):
-        await whatsapp_ingress.enqueue_whatsapp_inbound(
-            object(),
-            redis,
-            {
-                "external_id": "wa-manager-bad",
-                "external_chat_id": "77060000000@s.whatsapp.net",
-                "phone_e164": "77060000000",
-                "bridge_role": "manager",
-                "text": "/health",
-            },
-        )
-
-    assert redis.jobs == []
+    assert result["queued"] is True
+    queue_name, job = redis.jobs[0]
+    assert queue_name == "queue:manager"
+    assert job.bot_type == "manager"
+    assert job.bridge_role == "client"
 
 
 @pytest.mark.asyncio

@@ -118,6 +118,8 @@ export const state = {
   sock: null as ReturnType<typeof makeWASocket> | null,
   redisClient: null as Redis | null,
   forwardDelays: [200, 1000, 5000],
+  lastMessageAt: null as string | null,
+  reconnectAttempts: 0,
 };
 
 export const createBaileysClient = async (redis: Redis) => {
@@ -163,6 +165,7 @@ export const createBaileysClient = async (redis: Redis) => {
           process.exit(1);
         } else {
           reconnectAttempts++;
+          state.reconnectAttempts = reconnectAttempts;
           const delayMs = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 30000);
           logger.warn({ statusCode, delayMs }, 'Connection closed, reconnecting...');
           setTimeout(connect, delayMs);
@@ -170,6 +173,7 @@ export const createBaileysClient = async (redis: Redis) => {
       } else if (connection === 'open') {
         logger.info('WhatsApp connection opened');
         reconnectAttempts = 0;
+        state.reconnectAttempts = 0;
         void refreshManagerSelfSessions();
         // Start spool processor on connection
         startSpoolProcessor();
@@ -198,6 +202,8 @@ export const createBaileysClient = async (redis: Redis) => {
 };
 
 export const handleIncomingMessage = async (m: WAMessage) => {
+  state.lastMessageAt = new Date().toISOString();
+
   if (!m.message) {
     logger.warn({
       msgId: m.key.id,

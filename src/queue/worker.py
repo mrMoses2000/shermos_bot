@@ -847,7 +847,26 @@ async def _manager_loop(pg_pool, redis_client: RedisClient, sender: TelegramSend
             await asyncio.sleep(5)
 
 
+def _log_startup_config() -> None:
+    mgr_chat_ids = settings.manager_chat_ids_list
+    mgr_wa_numbers = settings.manager_whatsapp_numbers_list
+    mgr_wa_bridge = getattr(settings, "manager_whatsapp_bridge_url", None)
+    masked_wa = [f"***{n[-4:]}" for n in mgr_wa_numbers]
+
+    logger.info(
+        "worker_startup_config",
+        extra={
+            "manager_chat_ids": mgr_chat_ids,
+            "manager_whatsapp_numbers": masked_wa,
+            "manager_whatsapp_bridge_url": mgr_wa_bridge,
+        },
+    )
+    if not mgr_chat_ids and not mgr_wa_numbers:
+        logger.warning("no_manager_channels_configured")
+
+
 async def run_worker() -> None:
+    _log_startup_config()
     pg_pool = await postgres.create_pool(settings)
     await postgres.run_migrations(pg_pool)
     await postgres.seed_default_prices(pg_pool)

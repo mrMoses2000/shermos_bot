@@ -21,6 +21,16 @@ app.use('/send', setupSendRoute(redis));
 app.use('/pair', setupPairRoute());
 app.use('/status', setupStatusRoute());
 
+app.get('/healthz', (_req, res) => {
+  const connected = !!(state.sock?.ws?.isOpen);
+  res.json({
+    connected,
+    role: process.env.BRIDGE_ROLE || 'client',
+    last_message_at: state.lastMessageAt,
+    reconnect_attempts: state.reconnectAttempts,
+  });
+});
+
 const server = app.listen(port, host, async () => {
   logger.info({ host, port, role: process.env.BRIDGE_ROLE || 'client' }, 'Bridge listening');
   await createBaileysClient(redis);

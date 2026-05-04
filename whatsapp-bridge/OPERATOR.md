@@ -78,3 +78,53 @@ If you want to intentionally log out:
 - **401/405 during Baileys login:** Phone-code pairing failed in the WhatsApp Web handshake. Reset auth and use QR pairing.
 - **502 Bad Gateway:** Failed to send a message via WhatsApp (Baileys error).
 - **Spooling:** If the Python ingress is down, the bridge will spool inbound messages in Redis (`bridge:spool:inbound`) and retry automatically when the connection is restored.
+
+---
+
+## Dual-Bot Architecture (Two WhatsApp Numbers)
+
+### Overview
+
+The service runs **two independent bridge instances** — one per WhatsApp number — and a single Python backend that routes messages based on sender identity.
+
+```
+Client WhatsApp → shermos-wa-client (port 3001) ──┐
+                                                    ├──► POST /internal/whatsapp/inbound ──► Worker
+Manager WhatsApp → shermos-wa-manager (port 3002) ─┘
+```
+
+### systemd services
+
+| Service | EnvironmentFile | Port | BRIDGE_ROLE | BAILEYS_AUTH_PREFIX |
+|---------|----------------|------|-------------|----------------------|
+| `shermos-wa-client` | `whatsapp-bridge/.env` | 3001 | `client` | `baileys:auth:` |
+| `shermos-wa-manager` | `whatsapp-bridge/.env.manager` | 3002 | `manager` | `baileys:auth:manager:` |
+
+Both services run the same binary (`dist/index.js`) with different env files. Redis auth namespaces never overlap.
+
+### Message routing logic
+
+Every inbound message arrives at `POST /internal/whatsapp/inbound` with `bridge_role` = `client` or `manager` (set by the bridge based on `BRIDGE_ROLE` env).
+
+The Python ingress (`src/bot/whatsapp_ingress.py`) applies this rule:
+
+```
+sender_is_staff = sender_phone ∈ MANAGER_WHATSAPP_NUMBERS
+bot_type = "manager" if sender_is_staff else "client"
+queue  = "queue:manager" if bot_type == "manager" else "queue:incoming"
+```
+
+Key point: **`bridge_role` tells you WHICH number the message arrived on; `bot_type` tells you WHO sent it.** A regular client writing to the manager number is valid — their message goes to `queue:incoming` as usual.
+
+### Allowlist (staff phones)
+
+Only phones listed in `MANAGER_WHATSAPP_NUMBERS` (env var, comma-separated E.164 digits without `+`) are treated as staff. Messages from those phones → `queue:manager`. Everyone else → `queue:incoming`, regardless of which bridge received the message.
+
+To add a new staff number: append the E.164 digits to `MANAGER_WHATSAPP_NUMBERS` in `.env` (or the server environment) and restart the worker.
+
+### Pairing each bridge
+
+Pair client bridge: stop `shermos-wa-client`, run QR flow on port 3001.
+Pair manager bridge: stop `shermos-wa-manager`, temporarily set `BRIDGE_PORT=3002` and run QR flow on port 3002.
+
+See **Pairing** section above for full steps.

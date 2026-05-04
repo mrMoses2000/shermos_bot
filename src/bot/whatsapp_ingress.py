@@ -124,14 +124,14 @@ async def enqueue_whatsapp_inbound(pg_pool, redis_client, payload: dict[str, Any
     update_id = synthetic_update_id("whatsapp", external_id)
     chat_id = _phone_to_chat_id(phone_e164, external_chat_id)
     text, msg_type, callback_data = _normalize_message(payload)
-    bot_type = _bridge_role(payload)
-    if bot_type == "manager" and not _is_allowed_manager_phone(phone_e164):
-        logger.warning(
-            "whatsapp_manager_not_allowlisted",
-            extra={"phone_e164": phone_e164, "external_chat_id": external_chat_id},
-        )
-        raise PermissionError("manager WhatsApp number is not allowlisted")
+    bridge_role = _bridge_role(payload)
+    sender_is_staff = _is_allowed_manager_phone(phone_e164)
+    # bridge_role = channel (which WA number received it); bot_type = sender role
+    bot_type = "manager" if sender_is_staff else "client"
     queue_name = "queue:manager" if bot_type == "manager" else "queue:incoming"
+    if bridge_role == "manager" and not sender_is_staff:
+        # Client wrote to manager WA number — normal, goes to client queue
+        logger.info("whatsapp_client_on_manager_number", extra={"phone_e164": phone_e164})
 
     is_new = await postgres.mark_external_update_received(
         pg_pool,
@@ -172,6 +172,7 @@ async def enqueue_whatsapp_inbound(pg_pool, redis_client, payload: dict[str, Any
         media_mime=payload.get("media_mime"),
         raw_update=_raw_update(payload),
         bot_type=bot_type,
+        bridge_role=bridge_role,
     )
     await redis_client.enqueue_job(queue_name, job)
     logger.info(
