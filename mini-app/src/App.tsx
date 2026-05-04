@@ -7,10 +7,11 @@ import Measurements from "./pages/Measurements";
 import PricingEditor from "./pages/PricingEditor";
 import Settings from "./pages/Settings";
 import Gallery from "./pages/Gallery";
+import Status from "./pages/Status";
 import { useTelegram } from "./hooks/useTelegram";
 import { apiGet, type ApiAuth } from "./api/client";
 
-export type Page = "dashboard" | "orders" | "clients" | "measurements" | "pricing" | "gallery" | "settings";
+export type Page = "dashboard" | "orders" | "clients" | "measurements" | "pricing" | "gallery" | "settings" | "status";
 const ADMIN_TOKEN_STORAGE_KEY = "shermos_cms_admin_token";
 
 export default function App() {
@@ -106,6 +107,7 @@ export default function App() {
     if (page === "pricing") return <PricingEditor initData={auth} />;
     if (page === "gallery") return <Gallery initData={auth} />;
     if (page === "settings") return <Settings initData={auth} />;
+    if (page === "status") return <Status initData={auth} />;
     return <Dashboard initData={auth} />;
   })();
 

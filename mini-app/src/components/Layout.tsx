@@ -10,6 +10,7 @@ const nav: Array<{ id: Page; label: string }> = [
   { id: "gallery",      label: "Галерея" },
   { id: "pricing",      label: "Цены" },
   { id: "settings",     label: "Настройки" },
+  { id: "status",       label: "Статус" },
 ];
 
 type Props = {

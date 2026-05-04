@@ -12,6 +12,7 @@ from src.api import (
     routes_auth,
     routes_clients,
     routes_gallery,
+    routes_health,
     routes_measurements,
     routes_orders,
     routes_pricing,
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_analytics.router)
     app.include_router(routes_settings.router)
     app.include_router(routes_whatsapp.router)
+    app.include_router(routes_health.router)
 
     @app.get("/health")
     async def health():
