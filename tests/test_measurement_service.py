@@ -15,14 +15,21 @@ class FakePool:
         self.fetch_results = list(fetch_results or [])
         self.fetchrow_calls = []
         self.fetch_calls = []
+        self.calls = []
 
     async def fetchrow(self, query, *args):
         self.fetchrow_calls.append((query, args))
+        self.calls.append(("fetchrow", query, args))
         return self.fetchrow_results.pop(0) if self.fetchrow_results else None
 
     async def fetch(self, query, *args):
         self.fetch_calls.append((query, args))
+        self.calls.append(("fetch", query, args))
         return self.fetch_results.pop(0) if self.fetch_results else []
+
+    async def execute(self, query, *args):
+        self.calls.append(("execute", query, args))
+        return "OK"
 
 
 def _future_date(days=1) -> str:
@@ -89,6 +96,11 @@ async def test_check_conflict_detects_overlap():
 
     assert conflict["id"] == 1
     assert pool.fetchrow_calls
+    query, args = pool.fetchrow_calls[0]
+    assert "scheduled_time > $1" in query
+    assert "scheduled_time < $2" in query
+    assert args[0] == start - timedelta(minutes=measurement_service.MIN_START_GAP_MINUTES)
+    assert args[1] == start + timedelta(minutes=measurement_service.MIN_START_GAP_MINUTES)
 
 
 @pytest.mark.asyncio
@@ -186,6 +198,47 @@ async def test_schedule_measurement_creates_record():
 
 
 @pytest.mark.asyncio
+async def test_schedule_measurement_links_order_and_marks_scheduled():
+    future = _future_date()
+    start = measurement_service.validate_time(future, "10:15", TZ)
+    pool = FakePool(
+        fetchrow_results=[
+            None,
+            {
+                "id": 7,
+                "client_chat_id": 10,
+                "scheduled_time": start,
+                "duration_minutes": 45,
+                "address": "Адрес",
+                "client_name": "Петр",
+                "client_phone": "+996",
+                "status": "scheduled",
+                "order_request_id": "order-1",
+            },
+        ]
+    )
+
+    measurement = await measurement_service.schedule_measurement(
+        pool,
+        chat_id=10,
+        date=future,
+        time="10:15",
+        client_name="Петр",
+        phone="+996",
+        address="Адрес",
+        timezone=TZ,
+        order_request_id="order-1",
+    )
+
+    assert measurement["order_request_id"] == "order-1"
+    insert_query, insert_args = pool.fetchrow_calls[1]
+    assert "order_request_id" in insert_query
+    assert insert_args[-2] == "order-1"
+    assert pool.fetchrow_calls[1][1][-1] == measurement_service.MANAGER_CONFIRM_TIMEOUT_MINUTES
+    assert any(call[0] == "execute" and "UPDATE orders" in call[1] for call in pool.calls)
+
+
+@pytest.mark.asyncio
 async def test_update_status_validates_transitions():
     scheduled_time = measurement_service.validate_time(_future_date(), "10:15", TZ)
     pool = FakePool(
@@ -202,6 +255,22 @@ async def test_update_status_validates_transitions():
     invalid_pool = FakePool(fetchrow_results=[{"id": 2, "status": "idle"}])
     with pytest.raises(ValueError, match="Нельзя перевести"):
         await measurement_service.update_measurement_status(invalid_pool, 2, "completed")
+
+
+@pytest.mark.asyncio
+async def test_update_status_updates_linked_order():
+    scheduled_time = measurement_service.validate_time(_future_date(), "10:15", TZ)
+    pool = FakePool(
+        fetchrow_results=[
+            {"id": 1, "status": "scheduled", "scheduled_time": scheduled_time, "order_request_id": "order-1"},
+            {"id": 1, "status": "confirmed", "scheduled_time": scheduled_time, "order_request_id": "order-1"},
+        ]
+    )
+
+    updated = await measurement_service.update_measurement_status(pool, 1, "confirmed", manager_chat_id=99)
+
+    assert updated["status"] == "confirmed"
+    assert any(call[0] == "execute" and "UPDATE orders" in call[1] for call in pool.calls)
 
 
 @pytest.mark.asyncio

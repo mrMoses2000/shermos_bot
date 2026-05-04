@@ -15,7 +15,7 @@ def merge_render_params(
 ) -> dict[str, Any]:
     merged = ensure_json_object(collected_params)
     merged.update(ensure_json_object(action_params))
-    return merged
+    return normalize_render_params(merged)
 
 
 def missing_render_params(params: dict[str, Any] | None) -> list[str]:

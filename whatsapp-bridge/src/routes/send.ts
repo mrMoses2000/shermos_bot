@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { state } from '../lib/baileys-client.js';
+import { markSentByBridge, saveMessage } from '../lib/message-store.js';
 import Redis from 'ioredis';
 import { isConnectedSock, isPathInsideAllowedDirs, safeCompare } from '../lib/utils.js';
 import path from 'path';
@@ -33,6 +34,7 @@ const sendSchema = z.object({
 export const setupSendRoute = (redis: Redis) => {
   const mediaDir = path.resolve(process.env.MEDIA_DIR || '/data/incoming');
   const renderDir = path.resolve(process.env.RENDER_DIR || '/data/renders');
+  const galleryDir = path.resolve(process.env.GALLERY_DIR || '/data/gallery');
 
   router.post('/', async (req: Request, res: Response): Promise<any> => {
     const bridgeSecret = process.env.BRIDGE_SHARED_SECRET || '';
@@ -48,12 +50,19 @@ export const setupSendRoute = (redis: Redis) => {
 
     try {
       const body = sendSchema.parse(req.body);
-      const jid = `${body.to}@s.whatsapp.net`;
+      const jid = body.to.includes('@') ? body.to : `${body.to}@s.whatsapp.net`;
       const idemKey = `bridge:idem:${body.idempotency_key}`;
 
-      const cached = await redis.get(idemKey);
-      if (cached) {
-        return res.status(200).json(JSON.parse(cached));
+      const setnxResult = await redis.set(idemKey, JSON.stringify({ status: 'processing' }), 'EX', 60, 'NX');
+      if (!setnxResult) {
+        const cached = await redis.get(idemKey);
+        if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed.status === 'processing') {
+                return res.status(202).json({ status: 'processing' });
+            }
+            return res.status(200).json(parsed);
+        }
       }
 
       let payload: any = {};
@@ -84,7 +93,7 @@ export const setupSendRoute = (redis: Redis) => {
         }
       } else if (body.media) {
         const fullPath = path.resolve(body.media.path);
-        if (!isPathInsideAllowedDirs(fullPath, [mediaDir, renderDir])) {
+        if (!isPathInsideAllowedDirs(fullPath, [mediaDir, renderDir, galleryDir])) {
           return res.status(403).json({ error: 'Forbidden: Media path not allowed' });
         }
 
@@ -106,11 +115,16 @@ export const setupSendRoute = (redis: Redis) => {
       }
 
       const sentMsg = await sock.sendMessage(jid, payload);
+      await saveMessage(redis, sentMsg?.key, sentMsg?.message);
+      await markSentByBridge(redis, sentMsg?.key);
       const result = { message_id: sentMsg?.key?.id, status: 'sent' };
 
       await redis.set(idemKey, JSON.stringify(result), 'EX', 3600);
       return res.json(result);
     } catch (err: any) {
+      if (req.body?.idempotency_key) {
+        await redis.del(`bridge:idem:${req.body.idempotency_key}`);
+      }
       if (err instanceof z.ZodError) {
         return res.status(400).json({ error: 'Validation error', details: err.errors });
       }

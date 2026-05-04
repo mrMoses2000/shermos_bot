@@ -12,3 +12,17 @@ certs/*.pem
 mini-app/dist/
 mini-app/node_modules/
 
+
+# Patch/backup artefacts (not for version control)
+*.orig
+*.rej
+patch.diff
+.env.backup-*
+shermos-cms-login.png
+smoke_e2e.py
+.playwright-mcp/
+.DS_Store
+.netlify/
+.claude/
+whatsapp-bridge/.DS_Store
+whatsapp-bridge/.env.manager

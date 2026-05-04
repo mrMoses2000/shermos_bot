@@ -3,18 +3,24 @@ All Pydantic models for the system.
 """
 
 from datetime import UTC, datetime
-from typing import Optional
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
 
 class Job(BaseModel):
+    channel: Literal["telegram", "whatsapp"] = "telegram"
     update_id: int
     chat_id: int
     user_id: int
     text: str = ""
     msg_type: str = "text"
     callback_data: str = ""
+    external_chat_id: Optional[str] = None
+    external_message_id: Optional[str] = None
+    phone_e164: Optional[str] = None
+    media_path: Optional[str] = None
+    media_mime: Optional[str] = None
     raw_update: dict = Field(default_factory=dict)
     attempt: int = 0
     received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -28,8 +34,8 @@ class RenderPartitionAction(BaseModel):
     width_a: float
     width_b: Optional[float] = None
     width_c: Optional[float] = None
-    glass_type: str = "1"
-    frame_color: str = "1"
+    glass_type: Union[str, int] = "1"
+    frame_color: Union[str, int] = "1"
     partition_type: str = "sliding_2"
     matting: str = "none"
     complex_pattern: bool = False

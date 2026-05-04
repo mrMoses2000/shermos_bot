@@ -2,11 +2,11 @@
 
 from fastapi import APIRouter, Depends
 
-from src.api.auth import require_telegram_auth
+from src.api.auth import require_auth
 from src.config import settings
 from src.utils.config_manager import config
 
-router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depends(require_telegram_auth)])
+router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depends(require_auth)])
 
 
 @router.get("")

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from "../api/client";
+import { apiGet, apiPost, apiPatch, apiDelete, apiUpload, type ApiAuth } from "../api/client";
 import Spinner from "../components/Spinner";
 
 type PartitionType = "fixed" | "sliding_2" | "sliding_3" | "sliding_4";
@@ -39,7 +39,7 @@ type GalleryWork = {
   photos?: GalleryPhoto[];
 };
 
-type Props = { initData: string };
+type Props = { initData: ApiAuth };
 
 const API_URL = import.meta.env.VITE_API_BASE || "";
 

@@ -15,6 +15,8 @@ class SafeRedisBackend:
         self.commands = []
         self.lrem_calls = []
         self.recovered = []
+        self.zset_payloads = []
+        self.pipeline_calls = []
 
     async def execute_command(self, *args):
         self.commands.append(args)
@@ -34,6 +36,38 @@ class SafeRedisBackend:
             return None
         self.commands.append(("RPOPLPUSH", processing_name, queue_name))
         return self.recovered.pop(0)
+
+    async def zadd(self, delayed_name, mapping):
+        self.commands.append(("ZADD", delayed_name, mapping))
+
+    async def zrangebyscore(self, delayed_name, min, max, start=0, num=100):
+        self.commands.append(("ZRANGEBYSCORE", delayed_name, min, start, num))
+        return self.zset_payloads[:num]
+
+    def pipeline(self, transaction=True):
+        backend = self
+
+        class Pipeline:
+            def __init__(self):
+                self.calls = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            def zrem(self, delayed_name, payload):
+                self.calls.append(("ZREM", delayed_name, payload))
+
+            def lpush(self, queue_name, payload):
+                self.calls.append(("LPUSH", queue_name, payload))
+
+            async def execute(self):
+                backend.pipeline_calls.extend(self.calls)
+                return [1 for _ in self.calls]
+
+        return Pipeline()
 
 
 @pytest.mark.asyncio
@@ -78,10 +112,45 @@ async def test_recover_stuck_jobs_moves_back():
 
 
 @pytest.mark.asyncio
+async def test_schedule_job_uses_delayed_zset(monkeypatch):
+    job = Job(update_id=1, chat_id=2, user_id=3, text="hi")
+    backend = SafeRedisBackend()
+    client = RedisClient("redis://localhost")
+    client.client = backend
+    monkeypatch.setattr("src.db.redis_client.time.time", lambda: 1000)
+
+    await client.schedule_job("queue:delayed:incoming", job, delay_seconds=7)
+
+    assert backend.commands == [
+        ("ZADD", "queue:delayed:incoming", {job.model_dump_json(): 1007})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_move_due_jobs_requeues_due_payloads():
+    job = Job(update_id=1, chat_id=2, user_id=3, text="hi")
+    backend = SafeRedisBackend()
+    backend.zset_payloads = [job.model_dump_json()]
+    client = RedisClient("redis://localhost")
+    client.client = backend
+
+    moved = await client.move_due_jobs("queue:delayed:incoming", "queue:incoming")
+
+    assert moved == 1
+    assert backend.pipeline_calls == [
+        ("ZREM", "queue:delayed:incoming", job.model_dump_json()),
+        ("LPUSH", "queue:incoming", job.model_dump_json()),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_client_loop_survives_redis_error(monkeypatch):
     calls = []
 
     class Redis:
+        async def move_due_jobs(self, *_args, **_kwargs):
+            return 0
+
         async def dequeue_job_safe(self, *_args, **_kwargs):
             calls.append("dequeue")
             if len(calls) == 1:

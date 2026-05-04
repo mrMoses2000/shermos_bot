@@ -9,12 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api import (
     routes_analytics,
+    routes_auth,
     routes_clients,
     routes_gallery,
     routes_measurements,
     routes_orders,
     routes_pricing,
     routes_settings,
+    routes_whatsapp,
 )
 from src.config import settings
 from src.db import postgres
@@ -31,6 +33,9 @@ async def lifespan(app: FastAPI):
     else:
         app.state.owns_pool = False
     yield
+    redis_client = getattr(app.state, "redis_client", None)
+    if redis_client is not None:
+        await redis_client.close()
     if getattr(app.state, "owns_pool", False):
         await postgres.close_pool(app.state.pg_pool)
 
@@ -44,6 +49,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(routes_auth.router)
     app.include_router(routes_orders.router)
     app.include_router(routes_clients.router)
     app.include_router(routes_measurements.router)
@@ -51,6 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_gallery.router)
     app.include_router(routes_analytics.router)
     app.include_router(routes_settings.router)
+    app.include_router(routes_whatsapp.router)
 
     @app.get("/health")
     async def health():

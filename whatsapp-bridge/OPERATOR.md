@@ -4,10 +4,33 @@ This document describes how to manage and maintain the `whatsapp-bridge` service
 
 ## Pairing
 
-To pair the bridge with a WhatsApp account:
+Current preferred path: QR linking. Phone-code linking is kept as a fallback because it can fail with Baileys/WhatsApp `401` or `405` during the registration handshake.
+
+To pair the bridge with a WhatsApp account by QR:
+
+1. Stop any running bridge process:
+   ```bash
+   ./run.sh wa-bridge-stop
+   ```
+2. Reset only the Baileys auth state:
+   ```bash
+   ./run.sh wa-bridge-reset-auth
+   ```
+3. Start the bridge with QR output:
+   ```bash
+   ./run.sh wa-bridge-start-qr
+   ```
+4. Open WhatsApp on your phone, go to **Settings > Linked Devices > Link a Device**, and scan the QR printed in the terminal.
+5. After logs show that the connection is open, stop the QR session and start the normal bridge:
+   ```bash
+   ./run.sh wa-bridge-stop
+   ./run.sh wa-bridge-start
+   ```
+
+Fallback phone-code pairing:
 
 1. Ensure the bridge is running.
-2. Send a POST request to `/pair` with the phone number in E.164 format (without `+`):
+2. Send a POST request to `/pair` with the phone number in E.164 format without `+`:
    ```bash
    curl -X POST http://localhost:3001/pair \
      -H "X-Bridge-Secret: <your_secret>" \
@@ -20,14 +43,16 @@ To pair the bridge with a WhatsApp account:
    ```
 4. Open WhatsApp on your phone, go to **Settings > Linked Devices > Link a Device > Link with phone number instead**, and enter the code.
 
+If the phone-code flow returns `Couldn't link device` on the phone and logs `401` or `405`, use the QR path above.
+
 ## Re-pairing
 
 If the session is lost or you get a `Logged out` error in logs:
 
 1. The bridge will exit with code 1.
 2. Ensure you have the correct `BRIDGE_SHARED_SECRET`.
-3. Restart the bridge.
-4. Follow the **Pairing** steps again.
+3. Reset auth with `./run.sh wa-bridge-reset-auth`.
+4. Follow the QR **Pairing** steps again.
 
 ## Redis Auth Backup
 
@@ -49,6 +74,7 @@ If you want to intentionally log out:
 ## Troubleshooting
 
 - **503 Service Unavailable:** The bridge is either not initialized or lost connection to WhatsApp. Check logs for reconnection attempts.
-- **401 Unauthorized:** The `X-Bridge-Secret` header is missing or incorrect.
+- **401 Unauthorized on HTTP routes:** The `X-Bridge-Secret` header is missing or incorrect.
+- **401/405 during Baileys login:** Phone-code pairing failed in the WhatsApp Web handshake. Reset auth and use QR pairing.
 - **502 Bad Gateway:** Failed to send a message via WhatsApp (Baileys error).
 - **Spooling:** If the Python ingress is down, the bridge will spool inbound messages in Redis (`bridge:spool:inbound`) and retry automatically when the connection is restored.

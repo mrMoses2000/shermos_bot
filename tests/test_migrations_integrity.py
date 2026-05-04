@@ -45,3 +45,11 @@ def test_measurement_scheduling_rules_migration_adds_auto_confirm_and_slots():
     assert "ALTER COLUMN duration_minutes SET DEFAULT 45" in sql
     assert "CREATE TABLE IF NOT EXISTS measurement_slots" in sql
     assert "idx_measurement_slots_open_time" in sql
+
+
+def test_measurements_order_link_migration_links_measurements_to_orders():
+    sql = Path("migrations/020_measurements_order_link.sql").read_text(encoding="utf-8")
+
+    assert "ADD COLUMN IF NOT EXISTS order_request_id" in sql
+    assert "REFERENCES orders(request_id)" in sql
+    assert "idx_measurements_order_request" in sql

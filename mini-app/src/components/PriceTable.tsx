@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { apiPatch } from "../api/client";
+import { apiPatch, type ApiAuth } from "../api/client";
 
 export type Price = {
   id: string;
@@ -23,7 +23,7 @@ export type Material = {
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 type Props = {
-  initData: string;
+  initData: ApiAuth;
   materials: Material[];
   prices: Price[];
   onMaterialSaved: (material: Material) => void;

@@ -14,6 +14,7 @@ describe('X-Bridge-Secret constant-time auth', () => {
 
   beforeEach(() => {
     process.env.BRIDGE_SHARED_SECRET = 'secure_secret_123';
+    state.sock = null;
     redis = new Redis();
     app = express();
     app.use(express.json());
@@ -51,5 +52,22 @@ describe('X-Bridge-Secret constant-time auth', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ code: 'ABCD-1234' });
     expect(state.sock.requestPairingCode).toHaveBeenCalledWith('996555111222');
+  });
+
+  it('should reject /pair when QR-linked socket has a user but creds.registered is false', async () => {
+    state.sock = {
+      ws: { isOpen: true },
+      user: { id: '996555111222:4@s.whatsapp.net' },
+      authState: { creds: { registered: false } },
+      requestPairingCode: vi.fn(),
+    } as any;
+
+    const res = await request(app)
+      .post('/pair')
+      .set('x-bridge-secret', 'secure_secret_123')
+      .send({ phone: '996555111222' });
+
+    expect(res.status).toBe(409);
+    expect(state.sock.requestPairingCode).not.toHaveBeenCalled();
   });
 });

@@ -2,11 +2,11 @@
 
 from fastapi import APIRouter, Depends, Query
 
-from src.api.auth import require_telegram_auth
+from src.api.auth import require_auth
 from src.api.deps import get_pool
 from src.db import postgres
 
-router = APIRouter(prefix="/api/analytics", tags=["analytics"], dependencies=[Depends(require_telegram_auth)])
+router = APIRouter(prefix="/api/analytics", tags=["analytics"], dependencies=[Depends(require_auth)])
 
 
 @router.get("/dashboard")

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiGet, type ApiAuth } from "../api/client";
 import ClientCard, { type Client } from "../components/ClientCard";
 import Spinner from "../components/Spinner";
 
-export default function Clients({ initData }: { initData: string }) {
+export default function Clients({ initData }: { initData: ApiAuth }) {
   const [clients, setClients] = useState<Client[] | null>(null);
 
   useEffect(() => {

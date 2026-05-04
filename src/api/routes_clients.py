@@ -3,11 +3,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from src.api.auth import require_telegram_auth
+from src.api.auth import require_auth
 from src.api.deps import get_pool
 from src.db import postgres
 
-router = APIRouter(prefix="/api/clients", tags=["clients"], dependencies=[Depends(require_telegram_auth)])
+router = APIRouter(prefix="/api/clients", tags=["clients"], dependencies=[Depends(require_auth)])
 
 
 class ClientPatch(BaseModel):

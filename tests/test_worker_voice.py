@@ -123,6 +123,40 @@ async def test_resolve_voice_text_happy_path(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_voice_text_whatsapp_uses_local_media_path(monkeypatch, tmp_path):
+    _patch_outbound_recording(monkeypatch)
+    monkeypatch.setattr(settings, "assemblyai_api_key", "secret")
+    sender = VoiceFakeSender()
+    audio_path = tmp_path / "voice.ogg"
+    audio_path.write_bytes(b"whatsapp-opus")
+
+    async def fake_transcribe(audio, language=None):
+        assert audio == b"whatsapp-opus"
+        return "рассчитай перегородку два на два"
+
+    monkeypatch.setattr(worker, "transcribe_voice", fake_transcribe)
+
+    job = Job(
+        channel="whatsapp",
+        update_id=2,
+        chat_id=77713979524,
+        user_id=77713979524,
+        text="",
+        msg_type="voice",
+        media_path=str(audio_path),
+        raw_update={"raw": {"key": {"senderPn": "77713979524@s.whatsapp.net"}}},
+    )
+
+    ok = await worker._resolve_voice_text(job, object(), sender)
+
+    assert ok is True
+    assert job.text == "рассчитай перегородку два на два"
+    assert job.msg_type == "text"
+    assert sender.get_file_calls == []
+    assert sender.downloaded == []
+
+
+@pytest.mark.asyncio
 async def test_resolve_voice_text_handles_transcription_error(monkeypatch):
     _patch_outbound_recording(monkeypatch)
     monkeypatch.setattr(settings, "assemblyai_api_key", "secret")
@@ -220,7 +254,7 @@ async def test_process_client_job_transcribes_voice_then_runs_llm(monkeypatch):
 
     captured = {}
 
-    def fake_build_prompt(text, client, state, history, available_slots=None):
+    def fake_build_prompt(text, client, state, history, available_slots=None, conversation_memory=None):
         captured["prompt_text"] = text
         return "PROMPT"
 

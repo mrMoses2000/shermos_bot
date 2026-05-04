@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from src.api.auth import require_telegram_auth
+from src.api.auth import require_auth
 from src.api.deps import get_pool
 from src.config import settings
 from src.db import postgres
@@ -19,7 +19,7 @@ from src.engine.measurement_service import (
 router = APIRouter(
     prefix="/api/measurements",
     tags=["measurements"],
-    dependencies=[Depends(require_telegram_auth)],
+    dependencies=[Depends(require_auth)],
 )
 
 

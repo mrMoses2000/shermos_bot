@@ -9,6 +9,7 @@ describe('GET /status', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    process.env.BRIDGE_ROLE = 'client';
     app = express();
     app.use('/status', setupStatusRoute());
   });
@@ -27,7 +28,19 @@ describe('GET /status', () => {
     expect(response.status).toBe(200);
     expect(response.body.connection).toBe('open');
     expect(response.body.registered).toBe(true);
+    expect(response.body.role).toBe('client');
     expect(response.body.jid).toBe('9965...net');
+  });
+
+  it('should expose manager role', async () => {
+    process.env.BRIDGE_ROLE = 'manager';
+    // @ts-ignore
+    baileysClient.state.sock = { ws: { isOpen: true }, authState: { creds: { registered: false } } };
+
+    const response = await request(app).get('/status');
+
+    expect(response.status).toBe(200);
+    expect(response.body.role).toBe('manager');
   });
 
   it('should handle missing user', async () => {
@@ -40,5 +53,21 @@ describe('GET /status', () => {
     expect(response.body.connection).toBe('close');
     expect(response.body.registered).toBe(false);
     expect(response.body.jid).toBeNull();
+  });
+
+  it('should treat QR-linked sockets with user id as registered', async () => {
+    // @ts-ignore
+    baileysClient.state.sock = {
+      ws: { isOpen: true },
+      user: { id: '996555111222:4@s.whatsapp.net' },
+      authState: { creds: { registered: false } }
+    };
+
+    const response = await request(app).get('/status');
+
+    expect(response.status).toBe(200);
+    expect(response.body.connection).toBe('open');
+    expect(response.body.registered).toBe(true);
+    expect(response.body.jid).toBe('9965...net');
   });
 });

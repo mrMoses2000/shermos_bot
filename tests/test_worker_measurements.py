@@ -61,7 +61,16 @@ async def test_meas_confirm_notifies_client(monkeypatch, manager_db):
 
     import src.engine.measurement_service as measurement_service
 
+    async def fake_get_last_inbound_event(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
     monkeypatch.setattr(measurement_service, "update_measurement_status", fake_update_status)
+    async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
+        sender.messages.append({"chat_id": chat_id, "text": text})
+        return 1
+
+    monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
     sender = FakeSender()
 
     await worker.process_manager_job(
@@ -90,7 +99,16 @@ async def test_meas_reject_notifies_client(monkeypatch, manager_db):
 
     import src.engine.measurement_service as measurement_service
 
+    async def fake_get_last_inbound_event(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
     monkeypatch.setattr(measurement_service, "update_measurement_status", fake_update_status)
+    async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
+        sender.messages.append({"chat_id": chat_id, "text": text})
+        return 1
+
+    monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
     sender = FakeSender()
 
     await worker.process_manager_job(
@@ -126,8 +144,17 @@ async def test_meas_reject_after_auto_confirm_cancels_and_notifies_client(monkey
 
     import src.engine.measurement_service as measurement_service
 
+    async def fake_get_last_inbound_event(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
     monkeypatch.setattr(measurement_service, "update_measurement_status", fake_update_status)
     monkeypatch.setattr(worker, "pool_fetchrow_safe", fake_fetchrow)
+    async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
+        sender.messages.append({"chat_id": chat_id, "text": text})
+        return 1
+
+    monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
     sender = FakeSender()
 
     await worker.process_manager_job(
@@ -156,6 +183,11 @@ async def test_manager_slot_proposal_saves_open_slot(monkeypatch, manager_db):
 
     monkeypatch.setattr(worker.postgres, "get_conversation_state", fake_get_state)
     monkeypatch.setattr(measurement_service, "upsert_measurement_slot", fake_upsert_slot)
+    async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
+        sender.messages.append({"chat_id": chat_id, "text": text})
+        return 1
+
+    monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
     sender = FakeSender()
 
     await worker.process_manager_job(
@@ -172,7 +204,17 @@ async def test_manager_slot_proposal_saves_open_slot(monkeypatch, manager_db):
 async def test_notify_auto_confirmed_measurements(monkeypatch, manager_db):
     monkeypatch.setattr(worker.settings, "manager_chat_ids", "99")
     scheduled_time = datetime.now(TZ) + timedelta(days=1)
+    async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
+        sender.messages.append({"chat_id": chat_id, "text": text})
+        return 1
+
+    monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
     sender = FakeSender()
+
+    async def fake_get_last_inbound_event(_pool, chat_id):
+        return {"channel": "telegram"}
+
+    monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
 
     await worker._notify_auto_confirmed_measurements(
         object(),
@@ -191,6 +233,11 @@ async def test_meas_call_returns_phone(monkeypatch, manager_db):
         return {"id": 55, "client_phone": "+996555111222"}
 
     monkeypatch.setattr(worker, "pool_fetchrow_safe", fake_fetchrow)
+    async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
+        sender.messages.append({"chat_id": chat_id, "text": text})
+        return 1
+
+    monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
     sender = FakeSender()
 
     await worker.process_manager_job(
@@ -213,6 +260,11 @@ async def test_measurements_command_lists_upcoming(monkeypatch, manager_db):
         return [{"id": 9, "scheduled_time": scheduled_time, "client_name": "Айбек", "status": "scheduled"}]
 
     monkeypatch.setattr(worker.postgres, "list_measurements", fake_list_measurements)
+    async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
+        sender.messages.append({"chat_id": chat_id, "text": text})
+        return 1
+
+    monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
     sender = FakeSender()
 
     await worker.process_manager_job(

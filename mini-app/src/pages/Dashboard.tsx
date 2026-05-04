@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiGet, type ApiAuth } from "../api/client";
 import AnalyticsChart from "../components/AnalyticsChart";
 import Spinner from "../components/Spinner";
 
@@ -10,7 +10,7 @@ type Stats = {
   pending_measurements: number;
 };
 
-export default function Dashboard({ initData }: { initData: string }) {
+export default function Dashboard({ initData }: { initData: ApiAuth }) {
   const [stats, setStats] = useState<Stats | null>(null);
 
   useEffect(() => {

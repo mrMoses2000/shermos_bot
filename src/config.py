@@ -47,6 +47,21 @@ class Settings(BaseSettings):
     render_cache_ttl_seconds: int = 3600
 
     mini_app_url: str = ""
+    cms_admin_token: str = ""
+
+    jwt_secret: str = "change_me_in_production"
+    jwt_issuer: str = "shermos-api"
+    jwt_ttl_days: int = 7
+    jwt_refresh_ttl_days: int = 30
+
+    otp_expiry_minutes: int = 10
+    otp_max_attempts: int = 5
+    otp_rate_limit_1h: int = 10
+
+    bridge_shared_secret: str = ""
+    whatsapp_bridge_url: str = "http://localhost:3001"
+    manager_whatsapp_bridge_url: str = ""
+    manager_whatsapp_numbers: str = ""
 
     assemblyai_api_key: str = ""
     transcription_language: str = "ru"
@@ -68,6 +83,16 @@ class Settings(BaseSettings):
         if not self.manager_chat_ids:
             return []
         return [int(x.strip()) for x in self.manager_chat_ids.split(",") if x.strip()]
+
+    @property
+    def manager_whatsapp_numbers_list(self) -> list[str]:
+        if not self.manager_whatsapp_numbers:
+            return []
+        return [
+            "".join(ch for ch in x if ch.isdigit())
+            for x in self.manager_whatsapp_numbers.split(",")
+            if "".join(ch for ch in x if ch.isdigit())
+        ]
 
     @property
     def postgres_dsn(self) -> str:

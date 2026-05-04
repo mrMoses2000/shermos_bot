@@ -10,7 +10,7 @@ VALID_TRANSITIONS = {
     "idle": {"idle", "collecting", "scheduling"},
     "collecting": {"collecting", "confirming", "idle"},
     "confirming": {"rendering", "collecting", "idle"},
-    "rendering": {"idle"},
+    "rendering": {"idle", "collecting", "confirming", "scheduling"},
     "scheduling": {"scheduling", "idle"},
 }
 

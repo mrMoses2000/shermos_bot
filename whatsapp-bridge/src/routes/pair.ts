@@ -22,7 +22,7 @@ export const setupPairRoute = () => {
       return res.status(400).json({ error: 'Phone required (E.164 without +)' });
     }
 
-    if (sock.authState?.creds?.registered) {
+    if (sock.authState?.creds?.registered || sock.user?.id) {
       return res.status(409).json({ error: 'Already paired' });
     }
 

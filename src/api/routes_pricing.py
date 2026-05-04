@@ -3,12 +3,12 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from src.api.auth import require_telegram_auth
+from src.api.auth import require_auth
 from src.api.deps import get_pool
 from src.db import postgres
 from src.engine.pricing_cache import pricing_cache
 
-router = APIRouter(prefix="/api/pricing", tags=["pricing"], dependencies=[Depends(require_telegram_auth)])
+router = APIRouter(prefix="/api/pricing", tags=["pricing"], dependencies=[Depends(require_auth)])
 
 
 class PricePatch(BaseModel):

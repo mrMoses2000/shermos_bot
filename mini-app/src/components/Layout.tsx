@@ -15,17 +15,26 @@ const nav: Array<{ id: Page; label: string }> = [
 type Props = {
   page: Page;
   onPageChange: (page: Page) => void;
+  onLogout?: () => void;
+  showLogout?: boolean;
   children: ReactNode;
 };
 
-export default function Layout({ page, onPageChange, children }: Props) {
+export default function Layout({ page, onPageChange, onLogout, showLogout = false, children }: Props) {
   return (
     <div className="app-shell">
       <DotMatrixBackground />
       <header className="navbar">
-        <div className="navbar-header">
-          <span className="navbar-brand">Shermos</span>
-          <span className="navbar-sub">CMS</span>
+        <div className="navbar-top">
+          <div className="navbar-header">
+            <span className="navbar-brand">Shermos</span>
+            <span className="navbar-sub">CMS</span>
+          </div>
+          {showLogout ? (
+            <button className="btn btn-secondary btn-sm" type="button" onClick={onLogout}>
+              Выйти
+            </button>
+          ) : null}
         </div>
         <nav className="tabs" aria-label="Разделы CMS">
           {nav.map((item) => (

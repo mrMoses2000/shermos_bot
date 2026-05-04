@@ -19,6 +19,9 @@ def signed_init_data() -> str:
 
 
 def test_orders_route_lists_orders(monkeypatch):
+    from src.config import settings
+    monkeypatch.setattr(settings, "manager_bot_token", "manager-token")
+
     async def fake_list_orders(_pool, status=None, search=None, limit=50, offset=0):
         assert limit == 50
         return [{"request_id": "abc", "chat_id": 1, "status": status or "new"}]

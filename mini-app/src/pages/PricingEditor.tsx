@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiGet, type ApiAuth } from "../api/client";
 import PriceTable, { type Material, type Price } from "../components/PriceTable";
 import Spinner from "../components/Spinner";
 
-export default function PricingEditor({ initData }: { initData: string }) {
+export default function PricingEditor({ initData }: { initData: ApiAuth }) {
   const [prices, setPrices] = useState<Price[] | null>(null);
   const [materials, setMaterials] = useState<Material[] | null>(null);
 

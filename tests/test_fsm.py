@@ -4,6 +4,8 @@ from src.engine.fsm import format_summary, get_missing_params, is_valid_transiti
 def test_fsm_transitions_and_missing_params():
     assert is_valid_transition("idle", "collecting")
     assert not is_valid_transition("idle", "rendering")
+    assert is_valid_transition("rendering", "scheduling")
+    assert is_valid_transition("rendering", "collecting")
 
     missing = get_missing_params({"shape": "П-образная", "height": 2.5, "width_a": 2})
     assert "width_b" in missing

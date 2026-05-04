@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiGet, type ApiAuth } from "../api/client";
 import Spinner from "../components/Spinner";
 
 type SettingsResponse = {
@@ -8,7 +8,7 @@ type SettingsResponse = {
   mini_app_url: string;
 };
 
-export default function Settings({ initData }: { initData: string }) {
+export default function Settings({ initData }: { initData: ApiAuth }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
 
   useEffect(() => {

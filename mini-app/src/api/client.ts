@@ -1,10 +1,26 @@
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-export async function apiGet<T>(path: string, initData: string): Promise<T> {
+export type ApiAuth = string | {
+  telegramInitData?: string;
+  adminToken?: string;
+};
+
+function authHeaders(auth: ApiAuth): Record<string, string> {
+  if (typeof auth === "string") {
+    return auth ? { "X-Telegram-Init-Data": auth } : {};
+  }
+  if (auth.telegramInitData) {
+    return { "X-Telegram-Init-Data": auth.telegramInitData };
+  }
+  if (auth.adminToken) {
+    return { "X-CMS-Admin-Token": auth.adminToken };
+  }
+  return {};
+}
+
+export async function apiGet<T>(path: string, auth: ApiAuth): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "X-Telegram-Init-Data": initData
-    }
+    headers: authHeaders(auth)
   });
   if (!response.ok) {
     throw new Error(`API error ${response.status}`);
@@ -12,12 +28,12 @@ export async function apiGet<T>(path: string, initData: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function apiPatch<T>(path: string, initData: string, body: unknown): Promise<T> {
+export async function apiPatch<T>(path: string, auth: ApiAuth, body: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
-      "X-Telegram-Init-Data": initData
+      ...authHeaders(auth)
     },
     body: JSON.stringify(body)
   });
@@ -27,12 +43,12 @@ export async function apiPatch<T>(path: string, initData: string, body: unknown)
   return (await response.json()) as T;
 }
 
-export async function apiPost<T>(path: string, initData: string, body: unknown): Promise<T> {
+export async function apiPost<T>(path: string, auth: ApiAuth, body: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Telegram-Init-Data": initData
+      ...authHeaders(auth)
     },
     body: JSON.stringify(body)
   });
@@ -42,12 +58,10 @@ export async function apiPost<T>(path: string, initData: string, body: unknown):
   return (await response.json()) as T;
 }
 
-export async function apiDelete<T>(path: string, initData: string): Promise<T> {
+export async function apiDelete<T>(path: string, auth: ApiAuth): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "DELETE",
-    headers: {
-      "X-Telegram-Init-Data": initData
-    }
+    headers: authHeaders(auth)
   });
   if (!response.ok) {
     throw new Error(`API error ${response.status}`);
@@ -57,7 +71,7 @@ export async function apiDelete<T>(path: string, initData: string): Promise<T> {
 
 export async function apiUpload<T>(
   path: string,
-  initData: string,
+  auth: ApiAuth,
   files: File[],
   fieldName: string = "files"
 ): Promise<T> {
@@ -66,9 +80,7 @@ export async function apiUpload<T>(
   
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: {
-      "X-Telegram-Init-Data": initData
-    },
+    headers: authHeaders(auth),
     body: formData
   });
   if (!response.ok) {

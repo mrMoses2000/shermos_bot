@@ -1,10 +1,11 @@
-"""aiohttp webhook handlers for client and manager Telegram bots."""
+"""aiohttp webhook handlers for Telegram bots and internal WhatsApp ingress."""
 
 from __future__ import annotations
 
 from aiohttp import web
 
 from src.config import settings
+from src.bot.whatsapp_ingress import enqueue_whatsapp_inbound, is_bridge_secret_valid
 from src.db import postgres
 from src.llm.health_check import is_gemini_healthy
 from src.models import Job
@@ -57,6 +58,11 @@ async def _process_webhook(request: web.Request, bot_type: str, secret_token: st
 
         update = await request.json()
         update_id = int(update.get("update_id", 0))
+        
+        # Negate update_id for manager bot to avoid collisions with client bot
+        if bot_type == "manager" and update_id > 0:
+            update_id = -update_id
+
         chat_id, user_id, text, msg_type, callback_data = _extract_update(update)
         if not update_id or not chat_id:
             logger.warning("webhook_missing_update_fields", extra={"bot_type": bot_type})
@@ -94,6 +100,23 @@ async def handle_manager_webhook(request: web.Request) -> web.Response:
     return await _process_webhook(request, "manager", settings.manager_webhook_secret)
 
 
+async def handle_whatsapp_inbound(request: web.Request) -> web.Response:
+    if not is_bridge_secret_valid(request.headers.get("X-Bridge-Secret")):
+        logger.warning("whatsapp_ingress_secret_mismatch")
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+
+    try:
+        payload = await request.json()
+        result = await enqueue_whatsapp_inbound(request.app["pg_pool"], request.app["redis"], payload)
+        return web.json_response({"ok": True, **result})
+    except PermissionError as exc:
+        logger.warning("whatsapp_ingress_forbidden", extra={"error": str(exc)})
+        return web.json_response({"ok": False, "error": "forbidden"}, status=403)
+    except Exception as exc:
+        logger.exception("whatsapp_ingress_error", extra={"error": str(exc)})
+        return web.json_response({"ok": False, "error": "ingress_failed"}, status=500)
+
+
 async def health(request: web.Request) -> web.Response:
     return web.json_response(
         {
@@ -108,3 +131,4 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/health", health)
     app.router.add_post(settings.webhook_path_client, handle_client_webhook)
     app.router.add_post(settings.webhook_path_manager, handle_manager_webhook)
+    app.router.add_post("/internal/whatsapp/inbound", handle_whatsapp_inbound)

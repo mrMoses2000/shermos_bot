@@ -9,6 +9,7 @@ import { setupStatusRoute } from './routes/status.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 const port = parseInt(process.env.BRIDGE_PORT || '3001', 10);
+const host = process.env.BRIDGE_HOST || '127.0.0.1';
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379/0';
 
 const redis = new Redis(redisUrl);
@@ -20,8 +21,8 @@ app.use('/send', setupSendRoute(redis));
 app.use('/pair', setupPairRoute());
 app.use('/status', setupStatusRoute());
 
-const server = app.listen(port, async () => {
-  logger.info(`Bridge listening on port ${port}`);
+const server = app.listen(port, host, async () => {
+  logger.info({ host, port, role: process.env.BRIDGE_ROLE || 'client' }, 'Bridge listening');
   await createBaileysClient(redis);
 });
 

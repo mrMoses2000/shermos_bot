@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { apiGet } from "../api/client";
+import { apiGet, type ApiAuth } from "../api/client";
 import MeasurementCalendar, { type Measurement } from "../components/MeasurementCalendar";
 import Spinner from "../components/Spinner";
 
-export default function Measurements({ initData }: { initData: string }) {
+export default function Measurements({ initData }: { initData: ApiAuth }) {
   const [items, setItems] = useState<Measurement[] | null>(null);
 
   useEffect(() => {

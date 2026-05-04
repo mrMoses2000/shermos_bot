@@ -1,0 +1,18 @@
+[Unit]
+Description=Shermos WhatsApp Manager Bridge
+Wants=network-online.target
+After=network-online.target shermos-api.service redis-server.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/shermos_bot/whatsapp-bridge
+Environment=NODE_ENV=production
+EnvironmentFile=/home/ubuntu/shermos_bot/whatsapp-bridge/.env.manager
+ExecStart=/usr/bin/node /home/ubuntu/shermos_bot/whatsapp-bridge/dist/index.js
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

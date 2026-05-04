@@ -35,8 +35,8 @@ class MemoryPostgres:
     async def mark_update_status(self, _pool, update_id, status, error=None):
         self.statuses.append((update_id, status, error))
 
-    async def insert_outbound_event(self, _pool, chat_id, reply_text, reply_markup=None, inbound_event_id=None, bot_type="client"):
-        self.outbound.append((chat_id, reply_text, bot_type))
+    async def insert_outbound_event(self, _pool, chat_id, reply_text, **kwargs):
+        self.outbound.append((chat_id, reply_text, kwargs.get("bot_type", "client")))
         return len(self.outbound)
 
     async def mark_outbound_sent(self, _pool, event_id, telegram_message_id=None):

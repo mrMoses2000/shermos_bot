@@ -85,6 +85,55 @@ def test_build_prompt_includes_context_and_contract():
     assert "хочу перегородку" in prompt
 
 
+def test_build_prompt_compacts_long_history():
+    messages = [
+        {"role": "user", "text": f"старое {idx}"}
+        for idx in range(12)
+    ]
+    messages.append({"role": "assistant", "text": "x" * 900})
+
+    prompt = build_prompt("продолжи", None, None, messages)
+
+    assert "старое 0" not in prompt
+    assert "старое 9" in prompt
+    assert "x" * 401 not in prompt
+    assert "…" in prompt
+
+
+def test_build_prompt_includes_conversation_memory():
+    prompt = build_prompt(
+        "продолжи",
+        None,
+        {"mode": "collecting", "step": "materials", "collected_params": {"shape": "Г-образная"}},
+        [{"role": "user", "text": "последнее"}],
+        conversation_memory={
+            "summary_text": "Клиент ранее просил начать новый расчет.",
+            "facts_json": {"glass_type": "3", "frame_color": "2"},
+        },
+    )
+
+    assert "ПАМЯТЬ ДИАЛОГА" in prompt
+    assert "Клиент ранее просил начать новый расчет" in prompt
+    assert "glass_type=3" in prompt
+    assert "последнее" in prompt
+
+
+def test_build_prompt_warns_not_to_rerender_existing_order():
+    prompt = build_prompt(
+        "какое время есть?",
+        None,
+        {
+            "mode": "scheduling",
+            "step": "ask_time",
+            "collected_params": {"_rendered_order_id": "order-1", "shape": "Прямая"},
+        },
+        [],
+    )
+
+    assert "order_request_id: order-1" in prompt
+    assert "НЕ вызывай render_partition повторно" in prompt
+
+
 def test_slots_section_with_data():
     section = _slots_section({"2026-04-15": ["10:00", "10:30"], "2026-04-16": []})
 

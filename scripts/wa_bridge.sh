@@ -174,12 +174,150 @@ cmd_wa_bridge_server_preflight() {
     fi
 }
 
+cmd_wa_bridge_reset_auth() {
+    step "WhatsApp Bridge Reset Auth"
+    check_env
+    PREFIX=$(env_val "BAILEYS_AUTH_PREFIX")
+    if [ -z "$PREFIX" ]; then
+        PREFIX="baileys:auth:"
+    fi
+    REDIS_URL=$(env_val "REDIS_URL")
+    if [ -z "$REDIS_URL" ]; then
+        REDIS_URL="redis://localhost:6379/0"
+    fi
+
+    log "Resetting auth keys in Redis with prefix: $PREFIX"
+    cd "$WA_DIR"
+    REDIS_URL="$REDIS_URL" BAILEYS_AUTH_PREFIX="$PREFIX" node <<'NODE'
+const Redis = require('ioredis');
+const redis = new Redis(process.env.REDIS_URL);
+const prefix = process.env.BAILEYS_AUTH_PREFIX || 'baileys:auth:';
+let deleted = 0;
+const stream = redis.scanStream({ match: `${prefix}*`, count: 100 });
+
+stream.on('data', async (keys) => {
+  stream.pause();
+  try {
+    if (keys.length) {
+      deleted += await redis.del(...keys);
+    }
+  } finally {
+    stream.resume();
+  }
+});
+
+stream.on('end', async () => {
+  console.log(`Deleted ${deleted} keys`);
+  await redis.quit();
+});
+
+stream.on('error', async (err) => {
+  console.error(err);
+  await redis.quit();
+  process.exit(1);
+});
+NODE
+    log "Auth state reset successfully."
+}
+
+cmd_wa_bridge_stop() {
+    step "WhatsApp Bridge Stop"
+    if pgrep -f "node dist/index.js|tsx.*/src/index.ts" >/dev/null; then
+        pkill -f "node dist/index.js|tsx.*/src/index.ts" || true
+        sleep 1
+    fi
+    if pgrep -f "node dist/index.js|tsx.*/src/index.ts" >/dev/null; then
+        pkill -9 -f "node dist/index.js|tsx.*/src/index.ts" || true
+    fi
+    log "Bridge processes stopped if they were running."
+}
+
+cmd_wa_bridge_start() {
+    step "WhatsApp Bridge Start (Production)"
+    check_env
+    cd "$WA_DIR"
+    pnpm build
+    log "Starting bridge..."
+    NODE_ENV=production pnpm start
+}
+
+cmd_wa_bridge_start_qr() {
+    step "WhatsApp Bridge Start With QR (Production)"
+    check_env
+    cd "$WA_DIR"
+    pnpm build
+    warn "Use this only for initial linking. Scan the QR from WhatsApp > Linked devices."
+    WA_PRINT_QR=1 NODE_ENV=production pnpm start
+}
+
+cmd_wa_bridge_pair_smoke() {
+    step "WhatsApp Bridge Pair Smoke Test"
+    cd "$WA_DIR"
+    PHONE=${1:-77064264520}
+    log "Running pair smoke test for $PHONE..."
+    pnpm exec tsx scripts/smoke-test.ts pair "$PHONE"
+}
+
+cmd_wa_bridge_qr_smoke() {
+    step "WhatsApp Bridge QR Smoke Test"
+    cd "$WA_DIR"
+    log "Running QR smoke test..."
+    pnpm exec tsx scripts/smoke-test.ts qr
+}
+
+cmd_wa_bridge_deploy() {
+    step "WhatsApp Bridge Deploy Services"
+    
+    if [ ! -d "$PROJECT_DIR/scripts/systemd" ]; then
+        err "systemd directory not found in scripts!"
+        exit 1
+    fi
+    
+    log "Copying systemd services..."
+    sudo cp "$PROJECT_DIR/scripts/systemd/shermos-wa-client.service" /etc/systemd/system/
+    sudo cp "$PROJECT_DIR/scripts/systemd/shermos-wa-manager.service" /etc/systemd/system/
+    
+    log "Reloading systemd daemon..."
+    sudo systemctl daemon-reload
+    
+    log "Enabling and starting services..."
+    sudo systemctl enable shermos-wa-client shermos-wa-manager
+    sudo systemctl restart shermos-wa-client shermos-wa-manager
+    
+    sleep 2
+    local has_error=0
+
+    if sudo systemctl is-active --quiet shermos-wa-client; then
+        log "shermos-wa-client is running"
+    else
+        err "shermos-wa-client failed to start! Recent logs:"
+        sudo journalctl -u shermos-wa-client -n 50 --no-pager
+        has_error=1
+    fi
+
+    if sudo systemctl is-active --quiet shermos-wa-manager; then
+        log "shermos-wa-manager is running"
+    else
+        err "shermos-wa-manager failed to start! Recent logs:"
+        sudo journalctl -u shermos-wa-manager -n 50 --no-pager
+        has_error=1
+    fi
+
+    if [ "$has_error" -eq 1 ]; then
+        err "Deployment failed because one or more services did not start."
+        exit 1
+    fi
+}
+
 COMMAND="${1:-}"
 shift || true
 
 case "$COMMAND" in
     wa-bridge-check)
         cmd_wa_bridge_check
+        ;;
+    wa-bridge-deploy)
+        cmd_wa_bridge_deploy
         ;;
     wa-bridge-dev)
         cmd_wa_bridge_dev
@@ -195,6 +333,24 @@ case "$COMMAND" in
         ;;
     wa-bridge-server-preflight)
         cmd_wa_bridge_server_preflight
+        ;;
+    wa-bridge-reset-auth)
+        cmd_wa_bridge_reset_auth
+        ;;
+    wa-bridge-stop)
+        cmd_wa_bridge_stop
+        ;;
+    wa-bridge-start)
+        cmd_wa_bridge_start
+        ;;
+    wa-bridge-start-qr)
+        cmd_wa_bridge_start_qr
+        ;;
+    wa-bridge-pair-smoke)
+        cmd_wa_bridge_pair_smoke "$@"
+        ;;
+    wa-bridge-qr-smoke)
+        cmd_wa_bridge_qr_smoke
         ;;
     *)
         err "Unknown command: $COMMAND"

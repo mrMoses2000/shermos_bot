@@ -3,6 +3,7 @@ import express from 'express';
 import request from 'supertest';
 import { setupSendRoute } from '../src/routes/send.js';
 import * as baileysClient from '../src/lib/baileys-client.js';
+import { getMessage } from '../src/lib/message-store.js';
 import RedisMock from 'ioredis-mock';
 
 // Mock supertest might need this
@@ -66,7 +67,10 @@ describe('POST /send', () => {
       ws: { isOpen: true },
       user: { id: 'bot@s.whatsapp.net' },
       authState: { creds: { registered: true } },
-      sendMessage: vi.fn().mockResolvedValue({ key: { id: 'msg123' } }),
+      sendMessage: vi.fn().mockResolvedValue({
+        key: { id: 'msg123', remoteJid: '123456789@s.whatsapp.net', fromMe: true },
+        message: { conversation: 'hello' }
+      }),
     };
     // @ts-ignore
     baileysClient.state.sock = mockSock;
@@ -86,9 +90,13 @@ describe('POST /send', () => {
     expect(response.body).toEqual({ message_id: 'msg123', status: 'sent' });
     expect(mockSock.sendMessage).toHaveBeenCalledWith('123456789@s.whatsapp.net', { text: 'hello' });
 
+    const stored = await getMessage(redis, { remoteJid: '123456789@s.whatsapp.net', id: 'msg123' } as any);
+    expect(stored).toEqual({ conversation: 'hello' });
+
     // Verify idempotency
     const cached = await redis.get(`bridge:idem:${payload.idempotency_key}`);
     expect(cached).toBeDefined();
+    await expect(redis.get('bridge:sent:msg123')).resolves.toBe('1');
 
     // Call again with same key
     const response2 = await request(app)
@@ -98,6 +106,66 @@ describe('POST /send', () => {
 
     expect(response2.status).toBe(200);
     expect(mockSock.sendMessage).toHaveBeenCalledTimes(1); // Should NOT be called again
+  });
+
+  it('should keep a fully qualified JID unchanged', async () => {
+    const mockSock = {
+      ws: { isOpen: true },
+      user: { id: 'bot@s.whatsapp.net' },
+      authState: { creds: { registered: true } },
+      sendMessage: vi.fn().mockResolvedValue({ key: { id: 'jid-msg' } }),
+    };
+    // @ts-ignore
+    baileysClient.state.sock = mockSock;
+
+    const response = await request(app)
+      .post('/send')
+      .set('x-bridge-secret', 'test_secret')
+      .send({
+        to: '123456789@s.whatsapp.net',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440010',
+        text: 'hello jid'
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockSock.sendMessage).toHaveBeenCalledWith('123456789@s.whatsapp.net', { text: 'hello jid' });
+  });
+
+  it('should send interactive buttons payload', async () => {
+    const mockSock = {
+      ws: { isOpen: true },
+      user: { id: 'bot@s.whatsapp.net' },
+      authState: { creds: { registered: true } },
+      sendMessage: vi.fn().mockResolvedValue({ key: { id: 'buttons123' } }),
+    };
+    // @ts-ignore
+    baileysClient.state.sock = mockSock;
+
+    const response = await request(app)
+      .post('/send')
+      .set('x-bridge-secret', 'test_secret')
+      .send({
+        to: '123456789',
+        idempotency_key: '550e8400-e29b-41d4-a716-446655440011',
+        text: 'Выберите действие',
+        interactive: {
+          type: 'buttons',
+          buttons: [
+            { id: 'gallery_yes', title: 'Да' },
+            { id: 'gallery_no', title: 'Нет' }
+          ]
+        }
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockSock.sendMessage).toHaveBeenCalledWith('123456789@s.whatsapp.net', {
+      text: 'Выберите действие',
+      buttons: [
+        { buttonId: 'gallery_yes', buttonText: { displayText: 'Да' }, type: 1 },
+        { buttonId: 'gallery_no', buttonText: { displayText: 'Нет' }, type: 1 },
+      ],
+      headerType: 1
+    });
   });
 
   it('should return 403 for disallowed media path', async () => {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Optional
 
 import redis.asyncio as redis
@@ -80,6 +81,36 @@ class RedisClient:
                 break
             count += 1
         return count
+
+    async def schedule_job(self, delayed_name: str, job: Job, delay_seconds: float) -> None:
+        """Schedule a job for later delivery without blocking the worker loop."""
+        score = time.time() + max(0.0, delay_seconds)
+        await self._require_client().zadd(delayed_name, {job.model_dump_json(): score})
+
+    async def move_due_jobs(self, delayed_name: str, queue_name: str, limit: int = 100) -> int:
+        """Move due delayed jobs back to the main Redis list."""
+        client = self._require_client()
+        payloads = await client.zrangebyscore(
+            delayed_name,
+            min="-inf",
+            max=time.time(),
+            start=0,
+            num=limit,
+        )
+        if not payloads:
+            return 0
+
+        moved = 0
+        async with client.pipeline(transaction=True) as pipe:
+            for payload in payloads:
+                pipe.zrem(delayed_name, payload)
+                pipe.lpush(queue_name, payload)
+            results = await pipe.execute()
+
+        for index in range(0, len(results), 2):
+            if results[index]:
+                moved += 1
+        return moved
 
     async def acquire_user_lock(self, chat_id: int, ttl: int = 180) -> bool:
         result = await self._require_client().set(f"lock:user:{chat_id}", "1", nx=True, ex=ttl)

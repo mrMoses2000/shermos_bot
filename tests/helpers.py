@@ -4,7 +4,11 @@ import time
 from urllib.parse import urlencode
 
 
-def signed_init_data(bot_token: str = "manager-token", **extra: str) -> str:
+from src.config import settings
+
+def signed_init_data(bot_token: str | None = None, **extra: str) -> str:
+    if bot_token is None:
+        bot_token = settings.manager_bot_token
     payload = {"auth_date": str(int(time.time())), "query_id": "test-query", **extra}
     data_check_string = "\n".join(f"{key}={payload[key]}" for key in sorted(payload))
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
@@ -77,11 +81,15 @@ class FakeSender:
 class FakeRedis:
     def __init__(self, locked=False):
         self.jobs = []
+        self.scheduled = []
         self.locked = locked
         self.released = []
 
     async def enqueue_job(self, queue_name, job):
         self.jobs.append((queue_name, job))
+
+    async def schedule_job(self, delayed_name, job, delay_seconds):
+        self.scheduled.append((delayed_name, job, delay_seconds))
 
     async def acquire_user_lock(self, chat_id, ttl=180):
         return not self.locked

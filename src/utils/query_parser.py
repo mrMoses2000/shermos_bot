@@ -162,6 +162,19 @@ def normalize_render_params(params: dict[str, Any]) -> dict[str, Any]:
         normalized["width_b"] = None
     if normalized.get("width_c") in ("", 0):
         normalized["width_c"] = None
+
+    if normalized.get("shape") == "Прямая":
+        normalized.pop("width_b", None)
+        normalized.pop("width_c", None)
+        normalized.pop("shape_side", None)
+        for wall in ("front", "side", "left", "right"):
+            normalized.pop(f"rows_{wall}", None)
+            normalized.pop(f"cols_{wall}", None)
+        if normalized.get("handle_wall") not in ("front", "main", None):
+            normalized["handle_wall"] = "front"
+        if normalized.get("door_wall") not in ("front", "main", None):
+            normalized["door_wall"] = "front"
+
     if normalized.get("door_section") is not None:
         normalized["door_sections"] = [int(normalized["door_section"])]
     return normalized

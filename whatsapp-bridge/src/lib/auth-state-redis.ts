@@ -1,4 +1,4 @@
-import { initAuthCreds, BufferJSON, AuthenticationState, SignalDataTypeMap } from '@whiskeysockets/baileys';
+import { initAuthCreds, BufferJSON, AuthenticationState, SignalDataTypeMap, proto } from '@whiskeysockets/baileys';
 import Redis from 'ioredis';
 
 export const useRedisAuthState = async (
@@ -34,7 +34,7 @@ export const useRedisAuthState = async (
             ids.map(async (id) => {
               let value = await readData(`keys:${type}-${id}`);
               if (type === 'app-state-sync-key' && value) {
-                value = { ...value, syncKey: Buffer.from(value.syncKey.data) };
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
               }
               data[id] = value;
             })

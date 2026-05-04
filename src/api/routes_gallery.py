@@ -9,7 +9,7 @@ from PIL import Image
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from src.api.auth import require_telegram_auth
+from src.api.auth import require_auth
 from src.api.deps import get_pool
 from src.config import settings
 from src.db import postgres
@@ -20,7 +20,7 @@ logger = setup_logger(__name__)
 router = APIRouter(
     prefix="/api/gallery",
     tags=["gallery"],
-    dependencies=[Depends(require_telegram_auth)],
+    dependencies=[Depends(require_auth)],
 )
 
 PartitionType = Literal["fixed", "sliding_2", "sliding_3", "sliding_4"]
@@ -60,7 +60,7 @@ async def list_works(
 @router.post("/works")
 async def create_work(
     data: WorkCreate,
-    auth: dict = Depends(require_telegram_auth),
+    auth: dict = Depends(require_auth),
     pool=Depends(get_pool),
 ):
     work = await postgres.create_gallery_work(

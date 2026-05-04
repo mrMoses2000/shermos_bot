@@ -18,9 +18,12 @@ export const setupStatusRoute = () => {
       connection = 'open';
     }
 
+    const registered = !!state.sock?.authState?.creds?.registered || !!state.sock?.user?.id;
+
     return res.json({
       connection,
-      registered: !!state.sock?.authState?.creds?.registered,
+      registered,
+      role: process.env.BRIDGE_ROLE || 'client',
       jid: maskedJid,
       last_event_at: new Date().toISOString()
     });

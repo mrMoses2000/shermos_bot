@@ -70,17 +70,19 @@ async def check_conflict(pool, start: datetime, duration_minutes: int = DEFAULT_
 
     Returns the conflicting measurement dict, or None if slot is free.
     """
+    lower_bound = start - timedelta(minutes=MIN_START_GAP_MINUTES)
+    upper_bound = start + timedelta(minutes=MIN_START_GAP_MINUTES)
     row = await pool.fetchrow(
         """
         SELECT id, scheduled_time, duration_minutes, client_name, status
         FROM measurements
         WHERE status IN ('scheduled', 'confirmed')
-          AND scheduled_time > $1 - ($2 || ' minutes')::interval
-          AND scheduled_time < $1 + ($2 || ' minutes')::interval
+          AND scheduled_time > $1
+          AND scheduled_time < $2
         LIMIT 1
         """,
-        start,
-        MIN_START_GAP_MINUTES,
+        lower_bound,
+        upper_bound,
     )
     return dict(row) if row else None
 
@@ -141,6 +143,7 @@ async def schedule_measurement(
     address: str,
     timezone: str,
     duration_minutes: int = DEFAULT_DURATION_MINUTES,
+    order_request_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a new measurement. Raises ValueError on conflict or invalid time."""
     if not address or not address.strip():
@@ -150,7 +153,8 @@ async def schedule_measurement(
 
     conflict = await check_conflict(pool, start, duration_minutes)
     if conflict:
-        conflict_time = conflict["scheduled_time"].strftime("%H:%M")
+        tz = ZoneInfo(timezone)
+        conflict_time = conflict["scheduled_time"].astimezone(tz).strftime("%H:%M")
         raise ValueError(
             f"Это время занято (замер в {conflict_time} для {conflict['client_name']}). "
             f"Выберите другое время."
@@ -159,8 +163,19 @@ async def schedule_measurement(
     row = await pool.fetchrow(
         """
         INSERT INTO measurements
-            (client_chat_id, scheduled_time, duration_minutes, address, client_name, client_phone, notes, status, auto_confirm_at)
-        VALUES ($1, $2, $3, $4, $5, $6, '', 'scheduled', now() + ($7 || ' minutes')::interval)
+            (
+                client_chat_id,
+                scheduled_time,
+                duration_minutes,
+                address,
+                client_name,
+                client_phone,
+                notes,
+                status,
+                order_request_id,
+                auto_confirm_at
+            )
+        VALUES ($1, $2, $3, $4, $5, $6, '', 'scheduled', $7, now() + ($8 * interval '1 minute'))
         RETURNING *
         """,
         chat_id,
@@ -169,9 +184,21 @@ async def schedule_measurement(
         address or "",
         client_name,
         phone,
+        order_request_id,
         MANAGER_CONFIRM_TIMEOUT_MINUTES,
     )
     measurement = dict(row)
+    if order_request_id:
+        await pool.execute(
+            """
+            UPDATE orders
+            SET status='scheduled',
+                updated_at=now()
+            WHERE request_id=$1
+              AND status NOT IN ('cancelled', 'completed')
+            """,
+            order_request_id,
+        )
     logger.info("measurement_created", extra={"id": measurement["id"], "chat_id": chat_id, "time": start.isoformat()})
     return measurement
 
@@ -208,8 +235,29 @@ async def update_measurement_status(
         manager_chat_id,
         reason,
     )
+    updated = dict(row)
+    order_request_id = updated.get("order_request_id")
+    if order_request_id:
+        order_status = {
+            "confirmed": "confirmed",
+            "rejected": "cancelled",
+            "cancelled": "cancelled",
+            "completed": "completed",
+            "rescheduled": "scheduled",
+        }.get(new_status)
+        if order_status:
+            await pool.execute(
+                """
+                UPDATE orders
+                SET status=$2,
+                    updated_at=now()
+                WHERE request_id=$1
+                """,
+                order_request_id,
+                order_status,
+            )
     logger.info("measurement_status_changed", extra={"id": measurement_id, "from": current_status, "to": new_status})
-    return dict(row)
+    return updated
 
 
 async def auto_confirm_due_measurements(pool) -> list[dict[str, Any]]:

@@ -26,6 +26,10 @@ async def test_handle_clear_command(monkeypatch):
     async def upsert_conversation_state(_pool, chat_id, mode, step, collected_params):
         calls.append(("state", chat_id, mode, step, collected_params))
 
+    async def abandon_current_order_draft(_pool, chat_id, cancel_order=True):
+        calls.append(("abandon", chat_id, cancel_order))
+        return {"request_id": "draft-1"}
+
     async def insert_outbound_event(*_args, **_kwargs):
         return 42
 
@@ -33,6 +37,7 @@ async def test_handle_clear_command(monkeypatch):
         calls.append(("sent", event_id, telegram_message_id))
 
     monkeypatch.setattr(worker.postgres, "clear_chat_messages", clear_chat_messages)
+    monkeypatch.setattr(worker.postgres, "abandon_current_order_draft", abandon_current_order_draft)
     monkeypatch.setattr(worker.postgres, "upsert_conversation_state", upsert_conversation_state)
     monkeypatch.setattr(worker.postgres, "insert_outbound_event", insert_outbound_event)
     monkeypatch.setattr(worker.postgres, "mark_outbound_sent", mark_outbound_sent)
@@ -43,6 +48,7 @@ async def test_handle_clear_command(monkeypatch):
 
     assert handled is True
     assert ("clear", 100) in calls
+    assert ("abandon", 100, True) in calls
     assert sender.messages[0][2] == "История диалога очищена."
 
 
