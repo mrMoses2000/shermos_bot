@@ -50,16 +50,32 @@ def _reply_markup_to_payload(text: str, reply_markup: dict | None) -> dict[str, 
             url = url or web_app.get("url") or button.get("url")
 
     if url:
-        base_text = f"{base_text}\n\n🔗 {url}".strip()
+        base_text = f"{base_text}\n\n{url}".strip()
 
     if not buttons:
         return {"text": base_text}
 
-    base_text += "\n\nВыберите действие (ответьте командой):"
-    for idx, btn in enumerate(buttons, start=1):
-        base_text += f"\n👉 {btn['title']}: /{btn['id']}"
+    # Native interactive buttons (1–3) or list (4+)
+    if len(buttons) <= 3:
+        interactive: dict[str, Any] = {
+            "type": "buttons",
+            "buttons": buttons,
+        }
+    else:
+        interactive = {
+            "type": "list",
+            "list": {
+                "button_text": "Выбрать",
+                "sections": [
+                    {
+                        "title": "Действия",
+                        "rows": buttons,
+                    }
+                ],
+            },
+        }
 
-    return {"text": base_text}
+    return {"text": base_text, "interactive": interactive}
 
 
 class WhatsAppSender:

@@ -66,6 +66,7 @@ export const setupSendRoute = (redis: Redis) => {
       }
 
       let payload: any = {};
+      let interactiveFallback: string | null = null;
       if (body.interactive) {
         if (body.interactive.type === 'buttons' && body.interactive.buttons) {
           payload = {
@@ -77,6 +78,13 @@ export const setupSendRoute = (redis: Redis) => {
             })),
             headerType: 1
           };
+          // Build legacy plain-text fallback in case Baileys rejects buttons
+          let fallbackText = body.text || '';
+          fallbackText += '\n\nВыберите действие (ответьте командой):';
+          for (const b of body.interactive.buttons) {
+            fallbackText += `\n👉 ${b.title}: /${b.id}`;
+          }
+          interactiveFallback = fallbackText;
         } else if (body.interactive.type === 'list' && body.interactive.list) {
           payload = {
             text: body.text || '',
@@ -90,6 +98,15 @@ export const setupSendRoute = (redis: Redis) => {
               }))
             }))
           };
+          // Build legacy plain-text fallback for list
+          let fallbackText = body.text || '';
+          fallbackText += '\n\nВыберите действие (ответьте командой):';
+          for (const section of body.interactive.list.sections) {
+            for (const r of section.rows) {
+              fallbackText += `\n👉 ${r.title}: /${r.id}`;
+            }
+          }
+          interactiveFallback = fallbackText;
         }
       } else if (body.media) {
         const fullPath = path.resolve(body.media.path);
@@ -114,7 +131,21 @@ export const setupSendRoute = (redis: Redis) => {
         return res.status(400).json({ error: 'Message content missing' });
       }
 
-      const sentMsg = await sock.sendMessage(jid, payload);
+      let sentMsg: any;
+      try {
+        sentMsg = await sock.sendMessage(jid, payload);
+      } catch (sendErr: any) {
+        const msg: string = sendErr?.message || '';
+        if (
+          interactiveFallback !== null &&
+          (msg.includes('buttons not supported') || msg.includes('not-supported') || msg.includes('deprecated'))
+        ) {
+          console.warn('whatsapp_button_fallback: Baileys rejected interactive message, sending plain text', { jid, error: msg });
+          sentMsg = await sock.sendMessage(jid, { text: interactiveFallback });
+        } else {
+          throw sendErr;
+        }
+      }
       await saveMessage(redis, sentMsg?.key, sentMsg?.message);
       await markSentByBridge(redis, sentMsg?.key);
       const result = { message_id: sentMsg?.key?.id, status: 'sent' };
