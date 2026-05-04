@@ -204,8 +204,11 @@ async def test_manager_slot_proposal_saves_open_slot(monkeypatch, manager_db):
 async def test_notify_auto_confirmed_measurements(monkeypatch, manager_db):
     monkeypatch.setattr(worker.settings, "manager_chat_ids", "99")
     scheduled_time = datetime.now(TZ) + timedelta(days=1)
+    client_messages = []
+
     async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type="client", reply_markup=None, idempotency_key=None):
-        sender.messages.append({"chat_id": chat_id, "text": text})
+        # Only client notification goes through send_and_record now
+        client_messages.append({"chat_id": chat_id, "text": text})
         return 1
 
     monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
@@ -222,8 +225,13 @@ async def test_notify_auto_confirmed_measurements(monkeypatch, manager_db):
         [{"id": 5, "client_chat_id": 123, "scheduled_time": scheduled_time, "address": "Бишкек"}],
     )
 
-    assert any("автоматически подтверждён" in message["text"] for message in sender.messages)
-    assert any(message["chat_id"] == 99 for message in sender.messages)
+    # Client confirmation goes via send_and_record
+    assert any("автоматически подтверждён" in m["text"] for m in client_messages)
+    # Manager notifications go via outbox (insert_outbound_event) — captured in manager_db fixture
+    assert any(
+        call[0] == "outbound" and call[1] == 99 and call[2] == "manager"
+        for call in manager_db
+    )
 
 
 @pytest.mark.asyncio

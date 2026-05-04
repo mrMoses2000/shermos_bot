@@ -5,9 +5,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 from src.bot.keyboards import manager_measurement_keyboard
-from src.bot.telegram_sender import telegram_sender
-from src.bot.whatsapp_sender import manager_whatsapp_sender
-from src.bot.sender_common import send_and_record
 from src.db import postgres
 from src.engine.fsm import is_valid_transition
 from src.engine.measurement_service import schedule_measurement
@@ -249,47 +246,34 @@ async def apply_actions(
                     render_created_order = True
                     system_collected_patch["_rendered_order_id"] = request_id
 
+                    _new_order_text = (
+                        "<b>Новый расчёт Shermos</b>\n"
+                        f"Заказ: <code>{request_id}</code>\n"
+                        f"Клиент chat_id: <code>{chat_id}</code>\n"
+                        f"Сумма: <b>{price['total_price']} {price['currency']}</b>"
+                    )
                     for manager_chat_id in settings.manager_chat_ids_list:
-                        try:
-                            await send_and_record(
-                                pg_pool,
-                                telegram_sender,
-                                settings.manager_bot_token,
-                                manager_chat_id,
-                                (
-                                    "<b>Новый расчёт Shermos</b>\n"
-                                    f"Заказ: <code>{request_id}</code>\n"
-                                    f"Клиент chat_id: <code>{chat_id}</code>\n"
-                                    f"Сумма: <b>{price['total_price']} {price['currency']}</b>"
-                                ),
-                                bot_type="manager",
-                            )
-                        except Exception as exc:
-                            logger.error(
-                                "manager_telegram_notify_failed",
-                                extra={"chat_id": manager_chat_id, "kind": "new_order", "error": str(exc)},
-                            )
+                        await postgres.insert_outbound_event(
+                            pg_pool,
+                            chat_id=manager_chat_id,
+                            channel="telegram",
+                            reply_text=_new_order_text,
+                            reply_markup=None,
+                            bot_type="manager",
+                            inbound_event_id=None,
+                        )
 
                     for manager_phone in getattr(settings, "manager_whatsapp_numbers_list", []):
-                        try:
-                            await send_and_record(
-                                pg_pool,
-                                manager_whatsapp_sender,
-                                "",
-                                manager_phone,
-                                (
-                                    "<b>Новый расчёт Shermos</b>\n"
-                                    f"Заказ: <code>{request_id}</code>\n"
-                                    f"Клиент chat_id: <code>{chat_id}</code>\n"
-                                    f"Сумма: <b>{price['total_price']} {price['currency']}</b>"
-                                ),
-                                bot_type="manager",
-                            )
-                        except Exception as exc:
-                            logger.error(
-                                "manager_whatsapp_notify_failed",
-                                extra={"phone": manager_phone, "kind": "new_order", "error": str(exc)},
-                            )
+                        await postgres.insert_outbound_event(
+                            pg_pool,
+                            chat_id=int(manager_phone),
+                            channel="whatsapp",
+                            external_chat_id=f"{manager_phone}@s.whatsapp.net",
+                            reply_text=_new_order_text,
+                            reply_markup=None,
+                            bot_type="manager",
+                            idempotency_key=f"new_order:{request_id}:{manager_phone}",
+                        )
 
     if actions.actions.get("schedule_measurement"):
         missing_measurement_fields = _missing_measurement_fields(merged_collected)
@@ -331,57 +315,38 @@ async def apply_actions(
         m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
         order_request_id = measurement.get("order_request_id")
         order_line = f"Заказ: <code>{order_request_id}</code>\n" if order_request_id else ""
+        _new_measurement_text = (
+            "<b>Новая запись на замер</b>\n\n"
+            f"{order_line}"
+            f"Клиент: <b>{params.client_name}</b>\n"
+            f"Телефон: {params.phone}\n"
+            f"Адрес: {params.address or '—'}\n"
+            f"Время: <b>{m_time}</b>\n"
+            f"Замер: <code>#{m_id}</code>\n\n"
+            "Если не подтвердить и не отклонить за 15 минут, замер подтвердится автоматически."
+        )
         for manager_chat_id in settings.manager_chat_ids_list:
-            try:
-                await send_and_record(
-                    pg_pool,
-                    telegram_sender,
-                    settings.manager_bot_token,
-                    manager_chat_id,
-                    (
-                        "<b>Новая запись на замер</b>\n\n"
-                        f"{order_line}"
-                        f"Клиент: <b>{params.client_name}</b>\n"
-                        f"Телефон: {params.phone}\n"
-                        f"Адрес: {params.address or '—'}\n"
-                        f"Время: <b>{m_time}</b>\n"
-                        f"Замер: <code>#{m_id}</code>\n\n"
-                        "Если не подтвердить и не отклонить за 15 минут, замер подтвердится автоматически."
-                    ),
-                    bot_type="manager",
-                    reply_markup=manager_measurement_keyboard(m_id),
-                )
-            except Exception as exc:
-                logger.error(
-                    "manager_telegram_notify_failed",
-                    extra={"chat_id": manager_chat_id, "kind": "new_measurement", "error": str(exc)},
-                )
+            await postgres.insert_outbound_event(
+                pg_pool,
+                chat_id=manager_chat_id,
+                channel="telegram",
+                reply_text=_new_measurement_text,
+                reply_markup=manager_measurement_keyboard(m_id),
+                bot_type="manager",
+                inbound_event_id=None,
+            )
 
         for manager_phone in getattr(settings, "manager_whatsapp_numbers_list", []):
-            try:
-                await send_and_record(
-                    pg_pool,
-                    manager_whatsapp_sender,
-                    "",
-                    manager_phone,
-                    (
-                        "<b>Новая запись на замер</b>\n\n"
-                        f"{order_line}"
-                        f"Клиент: <b>{params.client_name}</b>\n"
-                        f"Телефон: {params.phone}\n"
-                        f"Адрес: {params.address or '—'}\n"
-                        f"Время: <b>{m_time}</b>\n"
-                        f"Замер: <code>#{m_id}</code>\n\n"
-                        "Если не подтвердить и не отклонить за 15 минут, замер подтвердится автоматически."
-                    ),
-                    bot_type="manager",
-                    reply_markup=manager_measurement_keyboard(m_id),
-                )
-            except Exception as exc:
-                logger.error(
-                    "manager_whatsapp_notify_failed",
-                    extra={"phone": manager_phone, "kind": "new_measurement", "error": str(exc)},
-                )
+            await postgres.insert_outbound_event(
+                pg_pool,
+                chat_id=int(manager_phone),
+                channel="whatsapp",
+                external_chat_id=f"{manager_phone}@s.whatsapp.net",
+                reply_text=_new_measurement_text,
+                reply_markup=manager_measurement_keyboard(m_id),
+                bot_type="manager",
+                idempotency_key=f"new_measurement:{m_id}:{manager_phone}",
+            )
 
     if actions.actions.get("state_patch"):
         patch = StatePatch(**actions.actions["state_patch"])

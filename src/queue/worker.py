@@ -679,32 +679,29 @@ async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, m
         except Exception as exc:
             logger.warning("auto_confirm_client_notify_failed", extra={"chat_id": client_chat_id, "error": str(exc)})
 
+        _auto_confirm_text = f"Замер #{measurement['id']} на <b>{m_time}</b> автоматически подтверждён."
+        _m_id = int(measurement["id"])
         for manager_chat_id in settings.manager_chat_ids_list:
-            await send_and_record(
+            await postgres.insert_outbound_event(
                 pg_pool,
-                sender,
-                settings.manager_bot_token,
-                manager_chat_id,
-                f"Замер #{measurement['id']} на <b>{m_time}</b> автоматически подтверждён.",
+                chat_id=manager_chat_id,
+                channel="telegram",
+                reply_text=_auto_confirm_text,
+                reply_markup=manager_measurement_keyboard(_m_id),
                 bot_type="manager",
-                reply_markup=manager_measurement_keyboard(int(measurement["id"])),
+                inbound_event_id=None,
             )
         for manager_phone in settings.manager_whatsapp_numbers_list:
-            try:
-                await send_and_record(
-                    pg_pool,
-                    manager_whatsapp_sender,
-                    "",
-                    manager_phone,
-                    f"Замер #{measurement['id']} на <b>{m_time}</b> автоматически подтверждён.",
-                    bot_type="manager",
-                    reply_markup=manager_measurement_keyboard(int(measurement["id"])),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "manager_whatsapp_auto_confirm_notify_failed",
-                    extra={"phone": manager_phone, "error": str(exc)},
-                )
+            await postgres.insert_outbound_event(
+                pg_pool,
+                chat_id=int(manager_phone),
+                channel="whatsapp",
+                external_chat_id=f"{manager_phone}@s.whatsapp.net",
+                reply_text=_auto_confirm_text,
+                reply_markup=manager_measurement_keyboard(_m_id),
+                bot_type="manager",
+                idempotency_key=f"auto_confirm:{measurement['id']}:{manager_phone}",
+            )
 
 
 async def _measurement_auto_confirm_loop(pg_pool, sender: TelegramSender, interval_seconds: int = 60) -> None:

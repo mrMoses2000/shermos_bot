@@ -323,19 +323,24 @@ async def test_process_client_job_timeout_keeps_user_message_in_history(monkeypa
 
 @pytest.mark.asyncio
 async def test_auto_confirm_whatsapp_client_uses_whatsapp_sender(monkeypatch):
-    calls = []
-    
+    """Client confirmation still uses send_and_record (direct); manager goes via outbox."""
+    client_calls = []
+    outbox_rows = []
+
     async def fake_get_last_inbound_event(_pool, chat_id):
         return {"channel": "whatsapp", "external_chat_id": "phone@s.whatsapp.net"}
-        
+
     async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type, reply_markup=None):
-        calls.append((active_sender.__class__.__name__, chat_id))
-        if active_sender == worker.whatsapp_sender:
-            raise Exception("Simulation of failure")
+        client_calls.append((active_sender.__class__.__name__, chat_id))
+
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        outbox_rows.append({"channel": channel, "chat_id": chat_id, "bot_type": bot_type, "external_chat_id": external_chat_id})
+        return len(outbox_rows)
 
     monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
     monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
-    
+    monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound_event)
+
     import types
     fake_settings = types.SimpleNamespace(
         telegram_bot_token="token",
@@ -344,30 +349,38 @@ async def test_auto_confirm_whatsapp_client_uses_whatsapp_sender(monkeypatch):
         manager_whatsapp_numbers_list=[]
     )
     monkeypatch.setattr(worker, "settings", fake_settings)
-    
+
     measurements = [{"id": 1, "client_chat_id": 10, "scheduled_time": worker.datetime.now(), "address": "test"}]
-    
+
     await worker._notify_auto_confirmed_measurements(object(), FakeSender(), measurements)
 
-    assert len(calls) == 2
-    assert ("WhatsAppSender", "phone@s.whatsapp.net") in calls
-    assert ("FakeSender", 100) in calls
+    # Client notification goes via send_and_record (WhatsApp channel)
+    assert ("WhatsAppSender", "phone@s.whatsapp.net") in client_calls
+    # Manager notification goes via outbox
+    assert any(r["channel"] == "telegram" and r["chat_id"] == 100 and r["bot_type"] == "manager" for r in outbox_rows)
 
 @pytest.mark.asyncio
 async def test_auto_confirm_client_failure_does_not_block_manager_notifications(monkeypatch):
-    calls = []
-    
+    """If client send_and_record fails, manager outbox inserts should still succeed."""
+    client_calls = []
+    outbox_rows = []
+
     async def fake_get_last_inbound_event(_pool, chat_id):
         return None
-        
+
     async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type, reply_markup=None):
-        calls.append((active_sender.__class__.__name__, chat_id))
+        client_calls.append((active_sender.__class__.__name__, chat_id))
         if chat_id == 10:
             raise Exception("Telegram sending failed")
 
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        outbox_rows.append({"channel": channel, "chat_id": chat_id, "bot_type": bot_type})
+        return len(outbox_rows)
+
     monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
     monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
-    
+    monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound_event)
+
     import types
     fake_settings = types.SimpleNamespace(
         telegram_bot_token="token",
@@ -376,31 +389,35 @@ async def test_auto_confirm_client_failure_does_not_block_manager_notifications(
         manager_whatsapp_numbers_list=[]
     )
     monkeypatch.setattr(worker, "settings", fake_settings)
-    
+
     measurements = [{"id": 1, "client_chat_id": 10, "scheduled_time": worker.datetime.now(), "address": "test"}]
-    
+
     await worker._notify_auto_confirmed_measurements(object(), FakeSender(), measurements)
-    
-    assert len(calls) == 2
-    assert ("FakeSender", 10) in calls
-    assert ("FakeSender", 100) in calls
+
+    # Client call attempted (failed)
+    assert ("FakeSender", 10) in client_calls
+    # Manager notification still inserted into outbox despite client failure
+    assert any(r["chat_id"] == 100 and r["bot_type"] == "manager" for r in outbox_rows)
 
 @pytest.mark.asyncio
 async def test_manager_whatsapp_notifications_still_use_manager_allowlist_number(monkeypatch):
-    calls = []
-    
+    """WhatsApp manager notification goes to outbox with correct external_chat_id."""
+    outbox_rows = []
+
     async def fake_get_last_inbound_event(_pool, chat_id):
         return {"channel": "telegram"}
-        
+
     async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type, reply_markup=None):
-        if hasattr(active_sender, "role"):
-            calls.append(("WhatsAppSenderManager", chat_id))
-        else:
-            calls.append(("FakeSender", chat_id))
+        pass  # client notification — not what we're testing here
+
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        outbox_rows.append({"channel": channel, "chat_id": chat_id, "bot_type": bot_type, "external_chat_id": external_chat_id, "idempotency_key": idempotency_key})
+        return len(outbox_rows)
 
     monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
     monkeypatch.setattr(worker, "send_and_record", fake_send_and_record)
-    
+    monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound_event)
+
     import types
     fake_settings = types.SimpleNamespace(
         telegram_bot_token="token",
@@ -409,9 +426,13 @@ async def test_manager_whatsapp_notifications_still_use_manager_allowlist_number
         manager_whatsapp_numbers_list=["77085766841"]
     )
     monkeypatch.setattr(worker, "settings", fake_settings)
-    
+
     measurements = [{"id": 1, "client_chat_id": 10, "scheduled_time": worker.datetime.now(), "address": "test"}]
-    
+
     await worker._notify_auto_confirmed_measurements(object(), FakeSender(), measurements)
-    
-    assert ("WhatsAppSenderManager", "77085766841") in calls
+
+    wa_row = next((r for r in outbox_rows if r["channel"] == "whatsapp"), None)
+    assert wa_row is not None
+    assert wa_row["external_chat_id"] == "77085766841@s.whatsapp.net"
+    assert wa_row["bot_type"] == "manager"
+    assert wa_row["idempotency_key"] == "auto_confirm:1:77085766841"

@@ -70,8 +70,8 @@ async def test_apply_actions_render_creates_order_and_notifies_manager(monkeypat
         calls.append(("order", request_id, chat_id, details_json, render_paths, price))
         return {"request_id": request_id}
 
-    async def fake_send_and_record(*args, **kwargs):
-        calls.append(("manager_message", args[2] if len(args)>2 else None, args[3] if len(args)>3 else None, args[4] if len(args)>4 else None))
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        calls.append(("manager_message", channel, chat_id, reply_text))
         return 1
 
     async def fake_ensure_loaded(_pool):
@@ -103,7 +103,7 @@ async def test_apply_actions_render_creates_order_and_notifies_manager(monkeypat
     monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", fake_upsert_draft)
     monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
     monkeypatch.setattr(actions_applier.postgres, "mark_active_order_draft_rendered", fake_mark_draft_rendered)
-    monkeypatch.setattr(actions_applier, "send_and_record", fake_send_and_record)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     monkeypatch.setattr(actions_applier, "uuid4", lambda: "request-1")
 
     settings = SimpleNamespace(manager_chat_ids_list=[99], manager_bot_token="manager")
@@ -275,6 +275,9 @@ async def test_render_reuse_rejects_stale_rendered_order_when_params_changed(mon
     def fake_calculate_price(*args, **kwargs):
         return {"total_price": 200, "currency": "USD"}
 
+    async def fake_insert_outbound_event(*_args, **_kwargs):
+        return 1
+
     monkeypatch.setattr(actions_applier, "render_partition", fake_render_partition)
     monkeypatch.setattr(actions_applier.postgres, "create_order", fake_create_order)
     monkeypatch.setattr(actions_applier.postgres, "get_rendered_order_draft", fake_get_rendered_draft)
@@ -284,7 +287,7 @@ async def test_render_reuse_rejects_stale_rendered_order_when_params_changed(mon
     monkeypatch.setattr(actions_applier.postgres, "mark_active_order_draft_rendered", fake_mark_draft_rendered)
     monkeypatch.setattr(actions_applier.pricing_cache, "reload", fake_reload)
     monkeypatch.setattr(actions_applier, "calculate_price", fake_calculate_price)
-    monkeypatch.setattr(actions_applier.telegram_sender, "send_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     settings = SimpleNamespace(manager_chat_ids_list=[], manager_bot_token="manager", manager_whatsapp_numbers_list=[])
 
     actions = ActionsJson(
@@ -392,8 +395,8 @@ async def test_apply_actions_schedule_measurement(monkeypatch):
     async def fake_update_client(_pool, chat_id, **fields):
         calls.append(("client", chat_id, fields))
 
-    async def fake_send_and_record(*args, **kwargs):
-        calls.append(("msg", args[2] if len(args)>2 else None, args[3] if len(args)>3 else None))
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        calls.append(("msg", channel, chat_id))
         return 1
 
     async def fake_get_rendered_draft(_pool, chat_id):
@@ -403,7 +406,7 @@ async def test_apply_actions_schedule_measurement(monkeypatch):
     monkeypatch.setattr(actions_applier, "schedule_measurement", fake_schedule_measurement)
     monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
     monkeypatch.setattr(actions_applier.postgres, "get_rendered_order_draft", fake_get_rendered_draft)
-    monkeypatch.setattr(actions_applier, "send_and_record", fake_send_and_record)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     settings = SimpleNamespace(
         manager_chat_ids_list=[99],
         manager_bot_token="manager",
@@ -499,9 +502,8 @@ async def test_apply_actions_schedule_measurement_links_existing_rendered_order(
     async def fake_update_client(*_args, **_kwargs):
         return None
 
-    async def fake_send_and_record(*args, **kwargs):
-        text = kwargs.get("text") or (args[4] if len(args) > 4 else "")
-        calls.append(("msg", 99, text))
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        calls.append(("msg", chat_id, reply_text))
         return 1
 
     async def fake_upsert_state(*_args, **_kwargs):
@@ -515,7 +517,7 @@ async def test_apply_actions_schedule_measurement_links_existing_rendered_order(
     monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
     monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
     monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", fake_upsert_draft)
-    monkeypatch.setattr(actions_applier, "send_and_record", fake_send_and_record)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     settings = SimpleNamespace(manager_chat_ids_list=[99], manager_bot_token="manager", timezone="Asia/Bishkek")
     actions = ActionsJson(
         reply_text="ok",
@@ -585,7 +587,7 @@ async def test_apply_actions_suppresses_render_during_measurement_flow(monkeypat
 
     async def fake_update_client(_pool, chat_id, **fields):
         calls.append(("client", chat_id, fields))
-    async def fake_send_and_record(*_args, **_kwargs):
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
         calls.append("manager_msg")
         return 1
 
@@ -607,7 +609,7 @@ async def test_apply_actions_suppresses_render_during_measurement_flow(monkeypat
     monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
     monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
     monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", fake_upsert_draft)
-    monkeypatch.setattr(actions_applier, "send_and_record", fake_send_and_record)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     settings = SimpleNamespace(
         manager_chat_ids_list=[99],
         manager_bot_token="manager",
@@ -759,14 +761,14 @@ async def test_apply_actions_blocks_hallucinated_measurement_during_materials(mo
         calls.append(("schedule", kwargs))
         return {"id": 1}
 
-    async def fake_send_and_record(*args, **kwargs):
+    async def fake_insert_outbound_event(*_args, **_kwargs):
         return 1
-        
+
     async def fake_upsert_state(_pool, chat_id, mode, step, collected_params):
         calls.append(("state", chat_id, mode, step, collected_params))
 
     monkeypatch.setattr(actions_applier, "schedule_measurement", fake_schedule_measurement)
-    monkeypatch.setattr(actions_applier, "send_and_record", fake_send_and_record)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
     
     actions = ActionsJson(
@@ -796,3 +798,195 @@ async def test_apply_actions_blocks_hallucinated_measurement_during_materials(mo
     assert result.get("measurement") is None
     assert "schedule" not in [c[0] for c in calls if isinstance(c, tuple)]
     assert ("state", 10, "collecting", "dims", {}) in calls
+
+
+@pytest.mark.asyncio
+async def test_schedule_measurement_routes_outbox_per_channel(monkeypatch):
+    """Telegram manager → channel='telegram'; WhatsApp manager → channel='whatsapp' with external_chat_id."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    outbox_rows = []
+
+    fake_measurement = {
+        "id": 42,
+        "client_chat_id": 10,
+        "scheduled_time": datetime(2026, 6, 1, 11, 0, tzinfo=ZoneInfo("Asia/Bishkek")),
+        "address": "Addr",
+        "client_name": "Тест",
+        "client_phone": "+7900",
+        "status": "scheduled",
+    }
+
+    async def fake_schedule_measurement(**kwargs):
+        return fake_measurement
+
+    async def fake_update_client(*_args, **_kwargs):
+        return None
+
+    async def fake_get_rendered_draft(_pool, chat_id):
+        return None
+
+    async def fake_upsert_state(*_args, **_kwargs):
+        return None
+
+    async def fake_upsert_draft(*_args, **_kwargs):
+        return {"request_id": "draft-1", "collected_params": {}}
+
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        outbox_rows.append({
+            "chat_id": chat_id,
+            "channel": channel,
+            "reply_text": reply_text,
+            "reply_markup": reply_markup,
+            "bot_type": bot_type,
+            "external_chat_id": external_chat_id,
+            "idempotency_key": idempotency_key,
+        })
+        return len(outbox_rows)
+
+    monkeypatch.setattr(actions_applier, "schedule_measurement", fake_schedule_measurement)
+    monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
+    monkeypatch.setattr(actions_applier.postgres, "get_rendered_order_draft", fake_get_rendered_draft)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", fake_upsert_draft)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
+
+    settings = SimpleNamespace(
+        manager_chat_ids_list=[99],
+        manager_bot_token="manager",
+        telegram_bot_token="client",
+        manager_whatsapp_numbers_list=["77001234567"],
+        timezone="Asia/Bishkek",
+    )
+
+    actions = ActionsJson(
+        reply_text="ok",
+        actions={
+            "schedule_measurement": {
+                "date": "2026-06-01",
+                "time": "11:00",
+                "client_name": "Тест",
+                "phone": "+7900",
+                "address": "Addr",
+            },
+            "state_patch": {
+                "mode": "scheduling",
+                "step": "measurement_ready",
+                "collected_params": {
+                    "measurement_date": "2026-06-01",
+                    "measurement_time": "11:00",
+                    "measurement_name": "Тест",
+                    "measurement_phone": "+7900",
+                    "measurement_address": "Addr",
+                },
+            },
+        },
+    )
+
+    result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), settings)
+
+    assert result["measurement"]["id"] == 42
+    assert len(outbox_rows) == 2
+
+    tg_row = next(r for r in outbox_rows if r["channel"] == "telegram")
+    assert tg_row["chat_id"] == 99
+    assert tg_row["bot_type"] == "manager"
+    assert tg_row["external_chat_id"] is None
+
+    wa_row = next(r for r in outbox_rows if r["channel"] == "whatsapp")
+    assert wa_row["chat_id"] == int("77001234567")
+    assert wa_row["bot_type"] == "manager"
+    assert wa_row["external_chat_id"] == "77001234567@s.whatsapp.net"
+    assert wa_row["idempotency_key"] == f"new_measurement:42:77001234567"
+
+
+@pytest.mark.asyncio
+async def test_render_partition_routes_outbox_per_channel(monkeypatch):
+    """new_order: Telegram manager → channel='telegram'; WhatsApp manager → channel='whatsapp'."""
+    outbox_rows = []
+
+    async def fake_render_partition(params, request_id, settings):
+        return {"render_paths": {"0deg": "/tmp/a.png"}}
+
+    async def fake_create_order(_pool, request_id, chat_id, details_json, render_paths, price):
+        return {"request_id": request_id}
+
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        outbox_rows.append({
+            "chat_id": chat_id,
+            "channel": channel,
+            "reply_text": reply_text,
+            "bot_type": bot_type,
+            "external_chat_id": external_chat_id,
+            "idempotency_key": idempotency_key,
+        })
+        return len(outbox_rows)
+
+    async def fake_ensure_loaded(_pool):
+        pass
+
+    async def fake_get_active_draft(_pool, chat_id):
+        return {"request_id": "request-1", "collected_params": {}}
+
+    async def fake_get_rendered_draft(_pool, chat_id):
+        return None
+
+    async def fake_upsert_draft(_pool, chat_id, collected_params, status="collecting", request_id=None):
+        return {"request_id": request_id or "request-1", "collected_params": collected_params}
+
+    async def fake_mark_draft_rendered(_pool, chat_id, request_id):
+        pass
+
+    async def fake_upsert_state(_pool, chat_id, mode, step, collected_params):
+        pass
+
+    monkeypatch.setattr(actions_applier, "render_partition", fake_render_partition)
+    monkeypatch.setattr(actions_applier.pricing_cache, "reload", fake_ensure_loaded)
+    monkeypatch.setattr(actions_applier.postgres, "create_order", fake_create_order)
+    monkeypatch.setattr(actions_applier.postgres, "get_rendered_order_draft", fake_get_rendered_draft)
+    monkeypatch.setattr(actions_applier.postgres, "get_active_order_draft", fake_get_active_draft)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", fake_upsert_draft)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
+    monkeypatch.setattr(actions_applier.postgres, "mark_active_order_draft_rendered", fake_mark_draft_rendered)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
+    monkeypatch.setattr(actions_applier, "uuid4", lambda: "request-1")
+
+    settings = SimpleNamespace(
+        manager_chat_ids_list=[99],
+        manager_bot_token="manager",
+        manager_whatsapp_numbers_list=["77001234567"],
+    )
+
+    actions = ActionsJson(
+        reply_text="ok",
+        actions={
+            "render_partition": {
+                "shape": "Прямая",
+                "height": 2.5,
+                "width_a": 3,
+                "partition_type": "sliding_2",
+                "glass_type": "1",
+                "frame_color": "1",
+                "matting": "none",
+                "add_handle": False,
+                "rows": 1,
+                "cols": 2,
+            }
+        },
+    )
+
+    result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), settings)
+
+    assert result["order"]["request_id"] == "request-1"
+    assert len(outbox_rows) == 2
+
+    tg_row = next(r for r in outbox_rows if r["channel"] == "telegram")
+    assert tg_row["chat_id"] == 99
+    assert tg_row["bot_type"] == "manager"
+
+    wa_row = next(r for r in outbox_rows if r["channel"] == "whatsapp")
+    assert wa_row["chat_id"] == int("77001234567")
+    assert wa_row["bot_type"] == "manager"
+    assert wa_row["external_chat_id"] == "77001234567@s.whatsapp.net"
+    assert wa_row["idempotency_key"] == "new_order:request-1:77001234567"
