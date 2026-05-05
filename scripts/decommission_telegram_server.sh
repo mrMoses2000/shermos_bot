@@ -26,7 +26,7 @@ set -euo pipefail
 UNIT_FILE="/etc/systemd/system/shermos-webhook.service"
 SSL_CERT="certs/webhook.pem"
 SSL_KEY="certs/webhook.key"
-REPO_DIR="${HOME}/shermos-bot"
+REPO_DIR="${HOME}/shermos_bot"
 
 echo "=== Phase 10 — Telegram decommission ==="
 echo "Started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -108,12 +108,12 @@ PSQL_CMD="psql -h ${POSTGRES_HOST:-localhost} -p ${POSTGRES_PORT:-5432} \
 
 PGPASSWORD="${POSTGRES_PASSWORD:-change_me}" ${PSQL_CMD} "
 UPDATE outbound_events
-SET status = 'dead',
-    error   = 'telegram_decommissioned',
-    updated_at = NOW()
+SET status        = 'failed',
+    error_message = 'telegram_decommissioned',
+    last_attempt_at = NOW()
 WHERE channel = 'telegram'
   AND status  = 'pending';
-" && echo "      Telegram pending events marked dead (if any)."
+" && echo "      Telegram pending events marked failed (if any)."
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 
