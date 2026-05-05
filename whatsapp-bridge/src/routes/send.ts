@@ -11,7 +11,8 @@ const router = Router();
 
 const sendSchema = z.object({
   to: z.string(),
-  idempotency_key: z.string().uuid(),
+  // Any stable string ≤ 200 chars (e.g. "auto_confirm:10:77085766841", or a UUID).
+  idempotency_key: z.string().min(1).max(200),
   text: z.string().optional(),
   interactive: z.object({
     type: z.enum(['buttons', 'list']),

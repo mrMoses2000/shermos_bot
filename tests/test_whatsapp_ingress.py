@@ -140,7 +140,12 @@ async def test_enqueue_whatsapp_inbound_client_on_manager_number(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enqueue_whatsapp_inbound_staff_on_client_number(monkeypatch):
-    """Staff member writes on client WA number → goes to queue:manager (allowlist wins)."""
+    """Staff on the CLIENT bridge → still treated as client.
+
+    Routing rule: bridge_role decides. Client-number messages always go through
+    the client flow, even from a staff phone — so staff can manually QA the
+    client UX without being kicked into the manager queue.
+    """
     redis = FakeRedis()
     monkeypatch.setattr(whatsapp_ingress.settings, "manager_whatsapp_numbers", "77067396626")
 
@@ -167,8 +172,8 @@ async def test_enqueue_whatsapp_inbound_staff_on_client_number(monkeypatch):
 
     assert result["queued"] is True
     queue_name, job = redis.jobs[0]
-    assert queue_name == "queue:manager"
-    assert job.bot_type == "manager"
+    assert queue_name == "queue:incoming"
+    assert job.bot_type == "client"
     assert job.bridge_role == "client"
 
 

@@ -126,12 +126,24 @@ async def enqueue_whatsapp_inbound(pg_pool, redis_client, payload: dict[str, Any
     text, msg_type, callback_data = _normalize_message(payload)
     bridge_role = _bridge_role(payload)
     sender_is_staff = _is_allowed_manager_phone(phone_e164)
-    # bridge_role = channel (which WA number received it); bot_type = sender role
-    bot_type = "manager" if sender_is_staff else "client"
+    # Routing rules:
+    #   bridge_role=client (message arrived on the client WhatsApp number)
+    #     → ALWAYS bot_type=client, even for staff. This lets staff test the
+    #       client UX from their own phone without being kicked into the
+    #       manager queue.
+    #   bridge_role=manager (arrived on the manager WhatsApp number)
+    #     → bot_type=manager only if sender is in the staff allowlist.
+    #     → Outsiders pinging the manager number get treated as clients
+    #       (they probably found the number from a business card etc.).
+    if bridge_role == "client":
+        bot_type = "client"
+        if sender_is_staff:
+            logger.info("staff_on_client_number_treated_as_client", extra={"phone_e164": phone_e164})
+    else:
+        bot_type = "manager" if sender_is_staff else "client"
+        if not sender_is_staff:
+            logger.info("whatsapp_client_on_manager_number", extra={"phone_e164": phone_e164})
     queue_name = "queue:manager" if bot_type == "manager" else "queue:incoming"
-    if bridge_role == "manager" and not sender_is_staff:
-        # Client wrote to manager WA number — normal, goes to client queue
-        logger.info("whatsapp_client_on_manager_number", extra={"phone_e164": phone_e164})
 
     is_new = await postgres.mark_external_update_received(
         pg_pool,

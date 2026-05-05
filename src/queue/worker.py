@@ -783,9 +783,23 @@ async def process_manager_job(
             )
         elif text.startswith("/orders"):
             orders = await postgres.list_orders(pg_pool, limit=10)
-            lines = ["<b>Последние заказы:</b>"]
+            status_icon = {
+                "new": "🆕", "scheduled": "📅", "confirmed": "✅",
+                "completed": "🎉", "cancelled": "❌",
+            }
+            lines = ["<b>Последние заказы:</b>", ""]
             for order in orders:
-                lines.append(f"• <code>{order['request_id']}</code> — {order['status']}")
+                created = order["created_at"].strftime("%d.%m %H:%M")
+                price_obj = order.get("price") or {}
+                if isinstance(price_obj, dict) and price_obj.get("total_price"):
+                    price = f"{price_obj['total_price']} {price_obj.get('currency','')}".strip()
+                else:
+                    price = "—"
+                short_id = str(order["request_id"]).split("-")[0]
+                icon = status_icon.get(order["status"], "•")
+                lines.append(f"{icon} <b>{created}</b> · {order['chat_id']}")
+                lines.append(f"   Сумма: {price} · <code>{short_id}</code>")
+                lines.append("")
             await send_and_record(
                 pg_pool,
                 sender,
