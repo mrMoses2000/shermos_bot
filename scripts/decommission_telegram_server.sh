@@ -102,11 +102,14 @@ echo
 
 echo "[6/6] Marking stale Telegram outbound_events as dead in Postgres..."
 
-PSQL_CMD="psql -h ${POSTGRES_HOST:-localhost} -p ${POSTGRES_PORT:-5432} \
-    -U ${POSTGRES_USER:-shermos} -d ${POSTGRES_DB:-shermos_bot} \
-    --no-password -t -c"
+# Postgres lives inside the docker container; psql isn't installed on the host.
+# Use `docker exec` to run psql inside the container.
+PG_CONTAINER="${PG_CONTAINER:-shermos_bot_postgres_1}"
+PG_USER="${POSTGRES_USER:-shermos}"
+PG_DB="${POSTGRES_DB:-shermos_bot}"
 
-PGPASSWORD="${POSTGRES_PASSWORD:-change_me}" ${PSQL_CMD} "
+if docker ps --format '{{.Names}}' | grep -q "^${PG_CONTAINER}$"; then
+    docker exec -i "${PG_CONTAINER}" psql -U "${PG_USER}" -d "${PG_DB}" -t -c "
 UPDATE outbound_events
 SET status        = 'failed',
     error_message = 'telegram_decommissioned',
@@ -114,6 +117,9 @@ SET status        = 'failed',
 WHERE channel = 'telegram'
   AND status  = 'pending';
 " && echo "      Telegram pending events marked failed (if any)."
+else
+    echo "      WARNING: container ${PG_CONTAINER} not running, skipping DB update."
+fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────
 
