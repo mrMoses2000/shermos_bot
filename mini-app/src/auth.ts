@@ -1,27 +1,10 @@
 /**
- * Auth-mode detection and token helpers.
- *
- * Two modes:
- *   "telegram" — Telegram Mini App (X-Telegram-Init-Data header)
- *   "cms"      — Standalone browser CMS (JWT Bearer + CSRF cookie)
+ * Auth helpers for the Shermos CMS (JWT Bearer + CSRF cookie).
  */
 
 const ACCESS_TOKEN_KEY = "shermos.access_token";
 
-export type AuthMode = "telegram" | "cms";
-
-/** Returns the current auth mode based on Telegram WebApp presence. */
-export function detectAuthMode(): AuthMode {
-  const initData = window.Telegram?.WebApp?.initData;
-  return initData ? "telegram" : "cms";
-}
-
-/** Returns Telegram initData string if available, otherwise null. */
-export function getInitData(): string | null {
-  return window.Telegram?.WebApp?.initData || null;
-}
-
-/** Reads the JWT access token from localStorage (CMS mode). */
+/** Reads the JWT access token from localStorage. */
 export function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_TOKEN_KEY);
 }
@@ -56,18 +39,10 @@ export function clearAuth(): void {
 }
 
 /**
- * Returns the appropriate auth headers for outgoing API requests.
- *
- * Telegram mode → { "X-Telegram-Init-Data": "<initData>" }
- * CMS mode      → { "Authorization": "Bearer <token>" }  (or {} if no token yet)
+ * Returns the Authorization header for outgoing API requests.
+ * Returns an empty object if no token is stored yet.
  */
 export function getAuthHeaders(): Record<string, string> {
-  const mode = detectAuthMode();
-  if (mode === "telegram") {
-    const initData = getInitData();
-    return initData ? { "X-Telegram-Init-Data": initData } : {};
-  }
-  // CMS mode
   const token = getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }

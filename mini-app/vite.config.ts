@@ -1,5 +1,4 @@
 import react from "@vitejs/plugin-react";
-import { resolve } from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -9,10 +8,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
-      input: {
-        mini: resolve(__dirname, "index.html"),
-        cms: resolve(__dirname, "cms.html"),
-      }
+      input: "index.html",
     }
   }
 });

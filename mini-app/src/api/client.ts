@@ -1,17 +1,15 @@
 /**
- * API client.
+ * API client for the Shermos CMS.
  *
- * Supports three auth modes:
- *   Telegram Mini App — pass initData string directly (backward-compat)
+ * Supports two auth modes:
  *   CMS JWT           — pass auth: { jwt: true } to use global auth helpers (auth.ts)
  *   CMS admin token   — pass auth: { adminToken: string } for token-based access
  *
  * In CMS JWT mode a 401 triggers one silent token-refresh attempt before
- * redirecting the user to /cms/login.
+ * redirecting the user to /login.
  */
 
 import {
-  detectAuthMode,
   getAccessToken,
   getCsrfToken,
   getAuthHeaders,
@@ -19,32 +17,22 @@ import {
 } from "../auth";
 
 // Configurable API base URL for separate-deploy mode.
-// Empty string => same-origin (Mini App served by the backend, dev mode).
+// Empty string => same-origin (dev mode).
 // Absolute URL  => Netlify-deployed frontend hitting an external API.
 const API_BASE: string = import.meta.env.VITE_API_BASE_URL ?? "";
 
 /** Unified auth discriminator. */
-export type ApiAuth =
-  | string
-  | { jwt: true }
-  | { telegramInitData?: string; adminToken?: string };
+export type ApiAuth = { jwt: true } | { adminToken?: string };
 
 // ─── internal helpers ────────────────────────────────────────────────────────
 
 function resolveAuthHeaders(auth: ApiAuth): Record<string, string> {
-  if (typeof auth === "string") {
-    // Legacy Telegram path: caller passes initData directly
-    return auth ? { "X-Telegram-Init-Data": auth } : {};
-  }
   if ("jwt" in auth && auth.jwt) {
     // CMS / global-auth path
     return getAuthHeaders();
   }
-  // Admin token / telegramInitData object path
-  const obj = auth as { telegramInitData?: string; adminToken?: string };
-  if (obj.telegramInitData) {
-    return { "X-Telegram-Init-Data": obj.telegramInitData };
-  }
+  // Admin token path
+  const obj = auth as { adminToken?: string };
   if (obj.adminToken) {
     return { "X-CMS-Admin-Token": obj.adminToken };
   }
@@ -87,7 +75,7 @@ async function silentRefresh(): Promise<string | null> {
 }
 
 function redirectToLogin(): void {
-  window.location.href = "/cms/login";
+  window.location.href = "/login";
 }
 
 // ─── core request ────────────────────────────────────────────────────────────
@@ -111,8 +99,8 @@ async function request<T>(
   });
 
   if (response.status === 401 && !isRetry) {
-    const isJwt = typeof auth !== "string" && "jwt" in auth && auth.jwt;
-    if (isJwt || detectAuthMode() === "cms") {
+    const isJwt = "jwt" in auth && auth.jwt;
+    if (isJwt) {
       const newToken = await silentRefresh();
       if (newToken) {
         // Retry once with the refreshed token
