@@ -1,0 +1,18 @@
+[Unit]
+Description=Shermos Mini App API
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/shermos_bot
+Environment=PYOPENGL_PLATFORM=egl
+ExecStart=/home/ubuntu/shermos_bot/.venv/bin/python run_api.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

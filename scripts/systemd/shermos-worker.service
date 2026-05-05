@@ -1,0 +1,20 @@
+[Unit]
+Description=Shermos Queue Worker
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
+User=ubuntu
+WorkingDirectory=/home/ubuntu/shermos_bot
+Environment=PYOPENGL_PLATFORM=egl
+ExecStart=/home/ubuntu/shermos_bot/.venv/bin/python run_worker.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

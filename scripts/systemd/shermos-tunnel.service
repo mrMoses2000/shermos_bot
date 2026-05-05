@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare Tunnel for Shermos Mini App
+After=network.target shermos-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+ExecStart=/usr/bin/cloudflared tunnel --url http://localhost:9443 --no-autoupdate
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
