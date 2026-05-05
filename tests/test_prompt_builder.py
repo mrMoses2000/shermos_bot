@@ -85,6 +85,36 @@ def test_build_prompt_includes_context_and_contract():
     assert "хочу перегородку" in prompt
 
 
+def test_build_prompt_separates_geometry_from_measurement_params():
+    """After Phase 11 fix: changing address/time/phone must NOT trigger render_partition.
+
+    Hardens against the bug where the LLM, seeing _rendered_order_id and a changed
+    measurement_address, mistakenly triggered render_partition again ("давайте сверим
+    параметры") instead of simply updating the address."""
+    prompt = build_prompt(
+        "у меня поменялся адрес",
+        None,
+        {
+            "mode": "scheduling",
+            "step": "confirming_parameters",
+            "collected_params": {
+                "_rendered_order_id": "abc",
+                "measurement_address": None,
+                "measurement_date": "2026-05-06",
+            },
+        },
+        [],
+    )
+    # Geometry parameters list must be explicit
+    assert "ПАРАМЕТРОВ ГЕОМЕТРИИ" in prompt
+    # Measurement params explicitly excluded from re-render
+    assert "ЗАПРЕЩЕНО рендерить" in prompt
+    assert "measurement_address" in prompt
+    # Scheduling mode = no render at all
+    assert "scheduling" in prompt
+    assert "render_partition НЕ вызывай" in prompt
+
+
 def test_build_prompt_instructs_to_mirror_client_language():
     """Phase 11: LLM must reply in the same language as the client's last message."""
     prompt = build_prompt(

@@ -238,9 +238,16 @@ reply_text: HTML (<b>, <i>, \\n), без markdown.
 4. Когда всё собрано — покажи резюме и спроси «Рендерить?».
 5. render_partition вызывай только после явного подтверждения.
 Если клиент дал несколько параметров сразу — сохрани все, не переспрашивай.
-Если есть _rendered_order_id и клиент ИЗМЕНИЛ параметры — ОБЯЗАТЕЛЬНО вызови render_partition снова. Иначе НЕ вызывай render_partition.
+
+ПОВТОРНЫЙ РЕНДЕР: render_partition заново вызывается ТОЛЬКО если есть _rendered_order_id И клиент изменил один из ПАРАМЕТРОВ ГЕОМЕТРИИ:
+shape, height, width_a/width_b/width_c, glass_type, frame_color, matting, sections (rows/cols/cols_left/cols_right/cols_front/cols_side), door_section, door_wall, handle_section, handle_wall, handle_sections, partition_type, add_handle, shape_side.
+
+ЗАПРЕЩЕНО рендерить заново при изменении: measurement_date, measurement_time, measurement_name, measurement_phone, measurement_address — это контактные данные замера, к 3D-визуализации они отношения не имеют. На такие изменения просто обнови state_patch.collected_params и подтверди клиенту словами «адрес/время/телефон обновлён», без render_partition и без «давайте сверим параметры».
+
 Для замера собери только явно подтверждённые measurement_date, measurement_time, measurement_name, measurement_phone, measurement_address.
 schedule_measurement вызывай только когда все пять measurement_* есть в state_patch.collected_params. Рабочее время 09:00-19:00, воскресенье выходной, шаг 15 минут.
+
+Если mode == "scheduling" (запись на замер уже идёт или завершена) — render_partition НЕ вызывай ни при каких условиях. Все правки касаются только данных замера.
 state_patch обязателен в каждом ответе и должен сохранять старые + новые параметры.
 
 ═══ ДОСТУПНЫЕ МАТЕРИАЛЫ ═══
