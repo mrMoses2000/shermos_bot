@@ -12,6 +12,33 @@ from typing import Any, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
 
+# RFC 5424 / sd-journal priority prefixes that systemd reads from stdout.
+# systemd strips them before storing; they never appear in journalctl output.
+# On a TTY the prefix is visible but harmless (small visual blemish accepted
+# for the sake of simplicity — no TTY detection needed).
+# Toggle via LOG_SYSLOG_PRIORITY=0 (default: 1 = enabled).
+_SYSLOG_PRIORITY: dict[str, str] = {
+    "DEBUG": "<7>",
+    "INFO": "<6>",
+    "WARNING": "<4>",
+    "ERROR": "<3>",
+    "CRITICAL": "<2>",
+}
+
+
+class SystemdPriorityFormatter(logging.Formatter):
+    """Prepends a syslog-priority prefix (<N>) to every formatted log line.
+
+    systemd parses these prefixes from stdout/stderr (sd_journal_stream_fd)
+    and maps them to the matching journal priority, making
+    ``journalctl -u shermos-worker -p err`` return only ERROR/CRITICAL entries.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        prefix = _SYSLOG_PRIORITY.get(record.levelname, "<6>")
+        return prefix + base
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -61,6 +88,40 @@ _RESERVED_LOG_RECORD_KEYS = {
 }
 
 
+def _make_formatter() -> logging.Formatter:
+    """Build the active formatter based on env vars.
+
+    LOG_FORMAT=json (default) → JSON lines.
+    LOG_SYSLOG_PRIORITY=1 (default) → wrap with SystemdPriorityFormatter so
+    that each line starts with the SD_* priority prefix (<N>).  systemd strips
+    the prefix before storing; terminals display it verbatim (accepted trade-off
+    for simplicity — no TTY detection required).
+    """
+    use_json = os.getenv("LOG_FORMAT", "json").lower() == "json"
+    use_syslog_prio = os.getenv("LOG_SYSLOG_PRIORITY", "1") not in ("0", "false", "no")
+
+    if use_json:
+        base_fmt: logging.Formatter = JsonFormatter()
+    else:
+        base_fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+    if use_syslog_prio:
+        # Wrap: SystemdPriorityFormatter delegates format() to base_fmt via
+        # its own super().format() — but since we want the base to be the
+        # JSON formatter (not the default Formatter), we sub-class dynamically.
+        class _Wrapped(SystemdPriorityFormatter):
+            _base = base_fmt
+
+            def format(self, record: logging.LogRecord) -> str:  # type: ignore[override]
+                base = self._base.format(record)
+                prefix = _SYSLOG_PRIORITY.get(record.levelname, "<6>")
+                return prefix + base
+
+        return _Wrapped()
+
+    return base_fmt
+
+
 def setup_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if logger.handlers:
@@ -69,10 +130,7 @@ def setup_logger(name: str) -> logging.Logger:
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     logger.setLevel(getattr(logging, level_name, logging.INFO))
     handler = logging.StreamHandler()
-    if os.getenv("LOG_FORMAT", "json").lower() == "json":
-        handler.setFormatter(JsonFormatter())
-    else:
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(_make_formatter())
     logger.addHandler(handler)
     logger.propagate = False
     return logger
