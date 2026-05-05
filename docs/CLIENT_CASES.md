@@ -34,7 +34,7 @@ INTEGRATION_DB_DSN="postgres://..." INTEGRATION_REDIS_URL="redis://..." \
 | C-15 | `test_C15_manager_alternative_time_proposal` | Manager free-text "DD.MM.YYYY в HH:MM" → slot created or outbound | PASS |
 | C-16 | `test_C16_telegram_duplicate_update_id_skipped` | Same update_id twice → only 1 inbound_events row | PASS |
 | C-17 | `test_C17_whatsapp_duplicate_external_id_skipped` | Same WA external_id twice → {queued:false, duplicate:true} | PASS |
-| C-18 | `test_C18_telegram_403_no_retry_spam` | PermanentSendError(403) → status=failed, attempts<5 | PASS |
+| C-18 | ~~`test_C18_telegram_403_no_retry_spam`~~ | Telegram-specific test — **deleted** in Phase 10 decommission | REMOVED |
 | C-19 | `test_C19_worker_recovery_after_kill_simulation` | Stuck jobs in processing queue → auto-recovered mid-loop | XFAIL |
 | C-20 | `test_C20_llm_timeout_user_gets_fallback` | TimeoutError from call_llm → fallback reply sent, status=failed | PASS |
 | C-21 | `test_C21_llm_garbage_no_actions_applied` | Non-JSON LLM output → parse fallback, no crash, outbound exists | PASS |

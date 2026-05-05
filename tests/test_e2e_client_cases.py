@@ -747,45 +747,6 @@ async def test_C17_whatsapp_duplicate_external_id_skipped(
 
 
 # ---------------------------------------------------------------------------
-# C-18 — Telegram 403 permanent error: no retry spam (≤1 attempt)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_C18_telegram_403_no_retry_spam(
-    pg_pool_integration,
-    redis_client_integration,
-    reset_integration_db,
-    mock_telegram_sender,
-):
-    """PermanentSendError(403) must immediately mark outbound as 'failed' (attempts=1)."""
-    from src.bot.errors import PermanentSendError
-
-    CHAT_ID = 110018
-    event_id = await pg_pool_integration.fetchval(
-        """
-        INSERT INTO outbound_events (chat_id, bot_type, reply_text, channel, created_at)
-        VALUES ($1, 'client', 'Hello 403', 'telegram', now() - interval '30 seconds')
-        RETURNING id
-        """,
-        CHAT_ID,
-    )
-    assert event_id is not None
-
-    class BlockedSender(mock_telegram_sender.__class__):
-        async def send_message(self, token, chat_id, text, **kwargs):
-            raise PermanentSendError(403, "Forbidden: bot was blocked by the user")
-
-    await dispatch_once(pg_pool_integration, BlockedSender())
-
-    row = await pg_pool_integration.fetchrow(
-        "SELECT status, attempts FROM outbound_events WHERE id=$1", event_id
-    )
-    assert row["status"] == "failed"
-    assert row["attempts"] >= 1
-    assert row["attempts"] < 5, "No retry spam: PermanentSendError must short-circuit"
-
-
-# ---------------------------------------------------------------------------
 # C-19 — Worker recovery of stuck jobs (xfail if recovery path absent)
 # ---------------------------------------------------------------------------
 
