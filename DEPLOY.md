@@ -294,3 +294,63 @@ curl http://localhost:9443/api/health/bridges
 | journalctl -p err returns nothing | Ensure `LOG_SYSLOG_PRIORITY=1` in `.env` (default: on) |
 | /metrics returns 404 | Check `shermos-api` is running; route is at `GET /metrics` (no auth) |
 | WA bridge not connecting | See Runbook 4 above |
+
+---
+
+## Phase 7 — Watchdog: Deploying systemd Unit Files
+
+All five service unit files live under `scripts/systemd/`. The worker unit has
+`Type=notify` / `WatchdogSec=60` so systemd restarts it if the Python process
+stops sending heartbeats (sd_notify watchdog pings every 30 s). The API, tunnel,
+and WA bridge units use `Type=simple` / `Restart=on-failure` only.
+
+### Install / update unit files on the server
+
+```bash
+ssh aws-shermos1-frankfurt
+cd ~/shermos_bot
+git pull origin main
+bash scripts/install_systemd.sh   # idempotent; reloads daemon; does NOT restart services
+```
+
+The script copies every `scripts/systemd/*.service` to `/etc/systemd/system/`
+and runs `sudo systemctl daemon-reload`. It is safe to run repeatedly.
+
+### Install systemd-python for watchdog heartbeats (worker only)
+
+```bash
+# On the server — one-time setup (requires libsystemd-dev):
+sudo apt install -y libsystemd-dev
+.venv/bin/pip install 'systemd-python>=235'
+```
+
+`src/utils/watchdog.py` gracefully no-ops if `systemd-python` is absent, so
+the worker starts even without it — but the WatchdogSec kill won't fire.
+
+### Roll services forward after unit file update
+
+```bash
+sudo systemctl restart shermos-worker shermos-api shermos-wa-client shermos-wa-manager
+sudo systemctl status shermos-worker | head -20   # confirm Type=notify + WatchdogSec=60
+```
+
+### Verify watchdog is active (Step 7.4 — orchestrator checklist)
+
+Run these on the server after install and restart:
+
+```bash
+# 1. Confirm sd_notify handshake succeeded (READY=1 appears within ~5 s of start):
+journalctl -u shermos-worker -n 20 | grep -E "READY=1|WATCHDOG"
+
+# 2. Confirm systemd sees WatchdogSec:
+systemctl show shermos-worker | grep -E "WatchdogUSec|Type"
+
+# 3. Smoke-test watchdog kill (DESTRUCTIVE — use in staging only):
+#    Find the worker PID:
+systemctl show -p MainPID shermos-worker
+#    Pause the process so it stops sending heartbeats:
+kill -STOP <MainPID>
+#    Wait ~70 s (WatchdogSec=60 + grace), then confirm auto-restart:
+sleep 70 && systemctl is-active shermos-worker   # should print "active"
+journalctl -u shermos-worker -n 5               # should show a fresh start
+```
