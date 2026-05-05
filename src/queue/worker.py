@@ -924,8 +924,16 @@ async def process_manager_job(
             from src.llm.manager_tools import dispatch
             from src.llm.executor import call_llm
             import json as _json
+            # Provide LLM with current active measurements so it can resolve
+            # implicit references like "не могу в это время" → measurement_id.
             try:
-                raw = await call_llm(build_manager_prompt(text))
+                active_meas = await postgres.list_measurements(
+                    pg_pool, upcoming_only=True, limit=10
+                )
+            except Exception:
+                active_meas = []
+            try:
+                raw = await call_llm(build_manager_prompt(text, active_measurements=active_meas))
                 # Strip ```json fences if present
                 cleaned = raw.strip()
                 if cleaned.startswith("```"):
@@ -935,6 +943,12 @@ async def process_manager_job(
                 tool = parsed.get("tool")
                 args = parsed.get("args") or {}
                 comment = parsed.get("comment", "")
+                # Auto-resolve measurement_id for propose_reschedule / cancel_measurement
+                # when LLM left it blank but only one active measurement exists.
+                if tool in ("propose_reschedule", "cancel_measurement") and not args.get("measurement_id"):
+                    if len(active_meas) == 1:
+                        args["measurement_id"] = int(active_meas[0]["id"])
+                        logger.info("manager_nl_auto_resolved_measurement_id", extra={"id": args["measurement_id"], "tool": tool})
                 if tool == "unknown" or not tool:
                     reply = (
                         "Не понял команду. Попробуй так:\n"
@@ -942,6 +956,7 @@ async def process_manager_job(
                         "• «замеры на завтра»\n"
                         "• «детали заказа 2fdb6a4b»\n"
                         "• «отмени замер 5»\n"
+                        "• «перенеси замер 5 на 14:00»\n"
                         "Или используй /orders, /measurements, /health."
                     )
                 else:
@@ -950,7 +965,11 @@ async def process_manager_job(
                         reply = f"Неизвестная команда: {tool}"
             except Exception as exc:
                 logger.warning("manager_nl_routing_failed", extra={"error": str(exc), "text": text[:80]})
-                reply = "Команды: /orders, /measurements, /health\nИли спроси на русском, например: «последние заказы»."
+                reply = (
+                    "Не получилось обработать запрос (Gemini-таймаут или сетевая ошибка). "
+                    "Попробуй ещё раз через минуту.\n"
+                    "Или используй прямые команды: /orders, /measurements, /health."
+                )
             await send_and_record(
                 pg_pool, sender, "", job.chat_id, reply, bot_type="manager",
             )

@@ -2,8 +2,34 @@
 
 from __future__ import annotations
 
+from typing import Any
 
-def build_manager_prompt(user_message: str) -> str:
+
+def _format_measurements_block(measurements: list[dict[str, Any]] | None) -> str:
+    """Render the active-measurements context section.
+
+    Empty list → an explicit "(нет активных замеров)" so Gemini doesn't
+    hallucinate one. None → block omitted entirely (caller didn't fetch them).
+    """
+    if measurements is None:
+        return ""
+    if not measurements:
+        return "═══ АКТИВНЫЕ ЗАМЕРЫ ═══\n\n(нет активных замеров)\n\n"
+    lines = ["═══ АКТИВНЫЕ ЗАМЕРЫ ═══", ""]
+    for m in measurements:
+        when = m["scheduled_time"].strftime("%d.%m %H:%M") if hasattr(m["scheduled_time"], "strftime") else str(m["scheduled_time"])
+        name = m.get("client_name") or "—"
+        phone = m.get("client_phone") or "—"
+        lines.append(f"- #{m['id']}: {when}, клиент {name}, тел. {phone}, статус {m.get('status', '?')}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_manager_prompt(
+    user_message: str,
+    active_measurements: list[dict[str, Any]] | None = None,
+) -> str:
+    measurements_block = _format_measurements_block(active_measurements)
     return f'''Ты — внутренний ассистент мастера компании Shermos. Мастер пишет тебе на русском (или другом языке), ты должен понять запрос и вызвать ОДНУ из доступных функций. Никакого свободного диалога — только tool call.
 
 Ответ строго в JSON-формате:
@@ -24,10 +50,11 @@ def build_manager_prompt(user_message: str) -> str:
    args: {{"measurement_id": int}}
 
 5. propose_reschedule — предложить клиенту другое время (если мастер занят).
-   args: {{"measurement_id": int, "new_time": "HH:MM", "new_date": "YYYY-MM-DD" (опц., если не указано — та же дата), "reason": "..." (опц.)}}
+   args: {{"measurement_id": int (опционально, если ясен из контекста), "new_time": "HH:MM", "new_date": "YYYY-MM-DD" (опц., если не указано — та же дата), "reason": "..." (опц.)}}
+   ВАЖНО: если мастер не указал номер замера явно, но в АКТИВНЫХ ЗАМЕРАХ виден один или контекст однозначен — подставь его measurement_id из списка выше. Если несколько активных и непонятно про какой — спроси через "unknown".
 
-6. unknown — если запрос непонятен или вне твоих возможностей.
-   args: {{}}, comment объясни мастеру что ты не понял.
+6. unknown — если запрос непонятен или вне твоих возможностей, или если нужно уточнить детали (например, какой именно замер из нескольких).
+   args: {{}}, comment объясни мастеру что ты не понял ИЛИ что нужно уточнить.
 
 ═══ ПРИМЕРЫ ═══
 
@@ -49,9 +76,12 @@ def build_manager_prompt(user_message: str) -> str:
 Мастер: «занят на замере 5 завтра, давай на 11:00»
 {{"tool": "propose_reschedule", "args": {{"measurement_id": 5, "new_time": "11:00", "reason": "занят"}}, "comment": "перенос замера 5 на 11:00"}}
 
+Мастер: «не смогу в это время, может на 14:00 сделает замер?» (когда в активных только один замер #1)
+{{"tool": "propose_reschedule", "args": {{"measurement_id": 1, "new_time": "14:00", "reason": "не смогу в это время"}}, "comment": "единственный активный замер — #1"}}
+
 Мастер: «погода в Москве»
 {{"tool": "unknown", "args": {{}}, "comment": "это не моя зона ответственности"}}
 
-═══ СООБЩЕНИЕ МАСТЕРА ═══
+{measurements_block}═══ СООБЩЕНИЕ МАСТЕРА ═══
 
 {user_message}'''

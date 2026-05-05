@@ -103,10 +103,25 @@ async def propose_reschedule(pg_pool, args: dict[str, Any]) -> str:
     from src.engine.measurement_service import propose_reschedule as _propose
     from src.config import settings
 
-    try:
-        mid = int(args.get("measurement_id"))
-    except (TypeError, ValueError):
-        return "Не понял номер замера."
+    raw_id = args.get("measurement_id")
+    mid: int
+    if raw_id in (None, ""):
+        # Fallback — if exactly one upcoming measurement exists, use it.
+        upcoming = await postgres.list_measurements(pg_pool, upcoming_only=True, limit=2)
+        if len(upcoming) == 1:
+            mid = int(upcoming[0]["id"])
+        elif not upcoming:
+            return "Активных замеров нет — нечего переносить."
+        else:
+            return (
+                "Не понял, какой замер перенести — у нас несколько активных. "
+                "Уточни номер: «перенеси замер 5 на 14:00»."
+            )
+    else:
+        try:
+            mid = int(raw_id)
+        except (TypeError, ValueError):
+            return "Не понял номер замера."
     new_time = str(args.get("new_time") or "").strip()
     if not new_time:
         return "Не понял новое время — укажи в формате HH:MM."
