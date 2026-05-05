@@ -31,4 +31,5 @@ async def test_postgres_migrations_applied(pg_pool_integration):
 async def test_redis_set_get(redis_client_integration):
     await redis_client_integration.client.set("test:smoke", "ok")
     val = await redis_client_integration.client.get("test:smoke")
-    assert val.decode() == "ok"
+    # RedisClient connects with decode_responses=True → values come back as str.
+    assert val == "ok"

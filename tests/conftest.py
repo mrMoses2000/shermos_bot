@@ -20,7 +20,8 @@ async def pg_pool_integration():
         pytest.skip("INTEGRATION_DB_DSN not set; integration tests run on server only")
     import asyncpg
     from src.db import postgres
-    pool = await asyncpg.create_pool(dsn)
+    # Use the same _init_connection as production so jsonb codec is registered.
+    pool = await asyncpg.create_pool(dsn, init=postgres._init_connection)
     try:
         await postgres.run_migrations(pool)
         yield pool
