@@ -180,6 +180,28 @@ def test_build_prompt_warns_not_to_rerender_existing_order():
     assert "НЕ вызывай render_partition повторно" in prompt
 
 
+def test_missing_params_section_requires_handle_side_when_handle_enabled():
+    """Phase 12: prompt must ask for handle_side when add_handle is True."""
+    section = _missing_params_section(
+        {
+            "collected_params": {
+                "shape": "Прямая",
+                "height": 2.5,
+                "width_a": 3,
+                "partition_type": "sliding_2",
+                "glass_type": "1",
+                "frame_color": "1",
+                "matting": "none",
+                "add_handle": True,
+                "rows": 1,
+                "cols": 2,
+                "handle_sections": [2],
+            }
+        }
+    )
+    assert "inside" in section or "outside" in section or "сторона ручки" in section.lower()
+
+
 def test_slots_section_with_data():
     section = _slots_section({"2026-04-15": ["10:00", "10:30"], "2026-04-16": []})
 

@@ -46,6 +46,7 @@ class RenderPartitionAction(BaseModel):
     add_handle: bool = False
     handle_style: str = "Современный"
     handle_position: str = "Право"
+    handle_side: Optional[Literal["inside", "outside", "both"]] = None
     handle_wall: Optional[str] = None
     handle_sections: Optional[list[int]] = None
     door_wall: Optional[str] = None

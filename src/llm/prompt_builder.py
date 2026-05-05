@@ -40,6 +40,7 @@ _PARAM_LABELS = {
     "cols": "Кол-во колонок (целое число)",
     "handle_wall": "На какой стороне ручка (front / side / left / right)",
     "handle_sections": "Номера секций с ручкой (например [2])",
+    "handle_side": "Сторона ручки (inside / outside / both — внутри / снаружи / с обеих сторон)",
 }
 
 
@@ -240,7 +241,7 @@ reply_text: HTML (<b>, <i>, \\n), без markdown.
 Если клиент дал несколько параметров сразу — сохрани все, не переспрашивай.
 
 ПОВТОРНЫЙ РЕНДЕР: render_partition заново вызывается ТОЛЬКО если есть _rendered_order_id И клиент изменил один из ПАРАМЕТРОВ ГЕОМЕТРИИ:
-shape, height, width_a/width_b/width_c, glass_type, frame_color, matting, sections (rows/cols/cols_left/cols_right/cols_front/cols_side), door_section, door_wall, handle_section, handle_wall, handle_sections, partition_type, add_handle, shape_side.
+shape, height, width_a/width_b/width_c, glass_type, frame_color, matting, sections (rows/cols/cols_left/cols_right/cols_front/cols_side), door_section, door_wall, handle_section, handle_wall, handle_sections, handle_side, partition_type, add_handle, shape_side.
 
 ЗАПРЕЩЕНО рендерить заново при изменении: measurement_date, measurement_time, measurement_name, measurement_phone, measurement_address — это контактные данные замера, к 3D-визуализации они отношения не имеют. На такие изменения просто обнови state_patch.collected_params и подтверди клиенту словами «адрес/время/телефон обновлён», без render_partition и без «давайте сверим параметры».
 

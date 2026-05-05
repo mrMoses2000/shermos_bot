@@ -49,7 +49,9 @@ def test_missing_render_params_requires_handle_location_when_handle_enabled():
         }
     )
 
-    assert missing == ["handle_sections", "handle_wall"]
+    assert "handle_sections" in missing
+    assert "handle_wall" in missing
+    assert "handle_side" in missing
 
 
 def test_merge_render_params_preserves_current_order_draft_values():
@@ -59,6 +61,45 @@ def test_merge_render_params_preserves_current_order_draft_values():
     )
 
     assert merged == {"shape": "Г-образная", "shape_side": "left", "height": 2, "width_a": 3, "width_b": 1, "glass_type": "1", "frame_color": "1", "matting": "none", "partition_type": "sliding_2", "handle_position": "Право"}
+
+def test_missing_render_params_requires_handle_side_when_handle_enabled():
+    """Phase 12: handle_side must be required when add_handle is True."""
+    missing = missing_render_params(
+        {
+            "shape": "Прямая",
+            "height": 2,
+            "width_a": 3,
+            "partition_type": "sliding_2",
+            "glass_type": "1",
+            "frame_color": "1",
+            "matting": "none",
+            "add_handle": True,
+            "rows": 1,
+            "cols": 2,
+            "handle_sections": [2],
+        }
+    )
+    assert "handle_side" in missing
+
+
+def test_handle_side_not_required_when_no_handle():
+    """handle_side must NOT be required when add_handle is False."""
+    missing = missing_render_params(
+        {
+            "shape": "Прямая",
+            "height": 2,
+            "width_a": 3,
+            "partition_type": "sliding_2",
+            "glass_type": "1",
+            "frame_color": "1",
+            "matting": "none",
+            "add_handle": False,
+            "rows": 1,
+            "cols": 2,
+        }
+    )
+    assert "handle_side" not in missing
+
 
 def test_shape_switch_contamination_is_cleaned_up():
     merged = merge_render_params(

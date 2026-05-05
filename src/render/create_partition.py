@@ -48,12 +48,25 @@ if sys.platform.startswith('linux'):
 
 # Удалены функции ввода пользователя, этот файл ожидает данные через JSON-конфигурацию
 
-def _create_handle(handle_style, handle_position, width, height, door='Основная дверь', section_bounds=None):
+def _create_handle(handle_style, handle_position, width, height, door='Основная дверь',
+                    section_bounds=None, *, handle_side: str = "inside"):
+    """Создает геометрию для дверной ручки.
+
+    handle_side управляет тем, с какой стороны стекла размещается ручка:
+      'inside'  → положительная Z (снутри помещения — по умолчанию, обратная совместимость).
+      'outside' → отрицательная Z (снаружи, дверь открывается на себя).
+      'both'    → с обеих сторон.
     """
-    Создает геометрию для дверной ручки.
-    """
+    # Определяем, с каких сторон строить ручку
+    if handle_side == "outside":
+        side_signs = [-1]
+    elif handle_side == "both":
+        side_signs = [+1, -1]
+    else:  # "inside" и любое другое значение — по умолчанию
+        side_signs = [+1]
+
     handle_parts = []
-# Определяем позицию ручки
+    # Определяем позицию ручки
     if door == 'Вторая дверь':
         x_pos_offset = 0.05  # Смещение на 5% от края
     else:
@@ -74,56 +87,57 @@ def _create_handle(handle_style, handle_position, width, height, door='Осно�
             x_pos = width * 0.5
         else:
             x_pos = width * (1 - x_pos_offset)
-    
+
     y_pos = height * 0.5  # По центру высоты
-    
-    if handle_style == 'Современный':
-        # Современная ручка - прямоугольная планка
-        handle_width = 0.02
-        handle_height = 0.15
-        handle_depth = 0.04
-        
-        # Основная планка ручки
-        handle_bar = trimesh.creation.box(
-            extents=[handle_width, handle_height, handle_depth],
-            transform=trimesh.transformations.translation_matrix([x_pos, y_pos, handle_depth/2 + 0.01])
-        )
-        handle_parts.append(handle_bar)
-        
-        # Монтажные пластины
-        mount_plate_top = trimesh.creation.box(
-            extents=[handle_width*1.5, handle_width, 0.005],
-            transform=trimesh.transformations.translation_matrix([x_pos, y_pos + handle_height/2, 0.01])
-        )
-        mount_plate_bottom = trimesh.creation.box(
-            extents=[handle_width*1.5, handle_width, 0.005],
-            transform=trimesh.transformations.translation_matrix([x_pos, y_pos - handle_height/2, 0.01])
-        )
-        handle_parts.extend([mount_plate_top, mount_plate_bottom])
-        
-    else:  # Классический
-        # Классическая ручка - круглая с кольцом
-        handle_radius = 0.04
-        handle_thickness = 0.008
-        
-        # Создаем кольцо для ручки
-        ring = trimesh.creation.torus(
-            major_radius=handle_radius, 
-            minor_radius=handle_thickness
-        )
-        # Поворачиваем кольцо, чтобы оно было перпендикулярно стеклу
-        ring.apply_transform(trimesh.transformations.rotation_matrix(np.pi/2, [1, 0, 0]))
-        ring.apply_transform(trimesh.transformations.translation_matrix([x_pos, y_pos, handle_radius + 0.015]))
-        handle_parts.append(ring)
-        
-        # Монтажная розетка
-        mount_base = trimesh.creation.cylinder(
-            radius=handle_radius * 0.6,
-            height=0.01,
-            transform=trimesh.transformations.translation_matrix([x_pos, y_pos, 0.01])
-        )
-        handle_parts.append(mount_base)
-    
+
+    for s in side_signs:
+        if handle_style == 'Современный':
+            # Современная ручка - прямоугольная планка
+            handle_width = 0.02
+            handle_height = 0.15
+            handle_depth = 0.04
+
+            # Основная планка ручки
+            handle_bar = trimesh.creation.box(
+                extents=[handle_width, handle_height, handle_depth],
+                transform=trimesh.transformations.translation_matrix([x_pos, y_pos, s * (handle_depth/2 + 0.01)])
+            )
+            handle_parts.append(handle_bar)
+
+            # Монтажные пластины
+            mount_plate_top = trimesh.creation.box(
+                extents=[handle_width*1.5, handle_width, 0.005],
+                transform=trimesh.transformations.translation_matrix([x_pos, y_pos + handle_height/2, s * 0.01])
+            )
+            mount_plate_bottom = trimesh.creation.box(
+                extents=[handle_width*1.5, handle_width, 0.005],
+                transform=trimesh.transformations.translation_matrix([x_pos, y_pos - handle_height/2, s * 0.01])
+            )
+            handle_parts.extend([mount_plate_top, mount_plate_bottom])
+
+        else:  # Классический
+            # Классическая ручка - круглая с кольцом
+            handle_radius = 0.04
+            handle_thickness = 0.008
+
+            # Создаем кольцо для ручки
+            ring = trimesh.creation.torus(
+                major_radius=handle_radius,
+                minor_radius=handle_thickness
+            )
+            # Поворачиваем кольцо, чтобы оно было перпендикулярно стеклу
+            ring.apply_transform(trimesh.transformations.rotation_matrix(np.pi/2, [1, 0, 0]))
+            ring.apply_transform(trimesh.transformations.translation_matrix([x_pos, y_pos, s * (handle_radius + 0.015)]))
+            handle_parts.append(ring)
+
+            # Монтажная розетка
+            mount_base = trimesh.creation.cylinder(
+                radius=handle_radius * 0.6,
+                height=0.01,
+                transform=trimesh.transformations.translation_matrix([x_pos, y_pos, s * 0.01])
+            )
+            handle_parts.append(mount_base)
+
     return handle_parts
 
 def _get_validated_float(prompt):
@@ -460,6 +474,7 @@ def _create_handles_for_wall(params, width, height, frame_thickness, vertical_mu
     handle_style = params.get('handle_style', 'Современный')
     handle_position = params.get('handle_position', 'Лево')
     handle_door = params.get('handle_door', 'Основная дверь')
+    handle_side = params.get('handle_side', 'inside') or 'inside'
     handle_sections = _collect_handle_sections(params)
 
     if handle_sections:
@@ -480,11 +495,13 @@ def _create_handles_for_wall(params, width, height, frame_thickness, vertical_mu
                         height,
                         handle_door,
                         section_bounds=section_bounds,
+                        handle_side=handle_side,
                     )
                 )
         return handle_parts
 
-    return _create_handle(handle_style, handle_position, width, height, handle_door)
+    return _create_handle(handle_style, handle_position, width, height, handle_door,
+                          handle_side=handle_side)
 
 
 def create_partition_mesh(params):

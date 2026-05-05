@@ -15,6 +15,7 @@ def get_tools_schema() -> str:
    Для Прямой формы: дверь по центру в 3 секциях означает door_section=2 и door_wall="front". Ручка тоже на "front".
    Для Г-образной добавь width_b и shape_side ("left"|"right"). Для П-образной добавь width_b и width_c.
    Если нужна ручка: handle_sections обязателен, а для Г/П формы ещё handle_wall ("front"|"side"|"left"|"right").
+   handle_side: "inside" (внутри помещения), "outside" (снаружи) или "both" (с обеих сторон). Для душевых перегородок чаще "outside" — дверь открывается на себя.
    Для сложных форм секции по сторонам храни в cols_front/cols_side/cols_left/cols_right и rows_*.
 
 2. schedule_measurement — СОЗДАТЬ новую запись на замер. Только если у клиента ещё НЕТ активного замера (т.е. в state.collected_params._measurement_id отсутствует).

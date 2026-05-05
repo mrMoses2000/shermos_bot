@@ -1,6 +1,10 @@
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from src.render import create_partition
+from src.render.create_partition import _create_handle
 
 
 def test_p_shape_uses_width_a_as_main_wall():
@@ -46,3 +50,53 @@ def test_renderer_uses_orthographic_camera_for_stable_section_spacing():
 
     assert "pyrender.OrthographicCamera" in source
     assert "pyrender.PerspectiveCamera" not in source
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 — handle_side geometry tests
+# ---------------------------------------------------------------------------
+
+def _centroid_z(part):
+    """Return the mean Z coordinate of a mesh part's bounding box."""
+    return part.bounds.mean(axis=0)[2]
+
+
+def test_create_handle_inside_default_positive_z():
+    """Default (inside) handle must have positive Z centroid."""
+    parts = _create_handle("Современный", "Центр", 1.0, 2.0)
+    assert parts, "Expected at least one mesh part"
+    for p in parts:
+        assert _centroid_z(p) > 0, f"Expected positive Z for inside handle, got {_centroid_z(p)}"
+
+
+def test_create_handle_outside_negative_z():
+    """Outside handle must have negative Z centroid."""
+    parts = _create_handle("Современный", "Центр", 1.0, 2.0, handle_side="outside")
+    assert parts, "Expected at least one mesh part"
+    for p in parts:
+        assert _centroid_z(p) < 0, f"Expected negative Z for outside handle, got {_centroid_z(p)}"
+
+
+def test_create_handle_both_doubles_part_count():
+    """'both' handle must produce exactly twice as many parts as 'inside' alone."""
+    inside_parts = _create_handle("Современный", "Центр", 1.0, 2.0, handle_side="inside")
+    both_parts = _create_handle("Современный", "Центр", 1.0, 2.0, handle_side="both")
+    assert len(both_parts) == 2 * len(inside_parts), (
+        f"Expected {2 * len(inside_parts)} parts for 'both', got {len(both_parts)}"
+    )
+
+
+def test_create_handle_classic_outside_negative_z():
+    """Classic-style outside handle must also have negative Z."""
+    parts = _create_handle("Классический", "Центр", 1.0, 2.0, handle_side="outside")
+    assert parts
+    for p in parts:
+        assert _centroid_z(p) < 0, f"Expected negative Z for classic outside handle, got {_centroid_z(p)}"
+
+
+def test_create_handle_both_has_positive_and_negative_z():
+    """'both' must have parts on each side of the glass (both signs present)."""
+    parts = _create_handle("Современный", "Центр", 1.0, 2.0, handle_side="both")
+    z_values = [_centroid_z(p) for p in parts]
+    assert any(z > 0 for z in z_values), "Expected at least one part with positive Z"
+    assert any(z < 0 for z in z_values), "Expected at least one part with negative Z"

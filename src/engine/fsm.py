@@ -50,6 +50,7 @@ def get_missing_params(collected_params: dict[str, Any], shape: str | None = Non
         required.append("width_c")
     if _is_truthy(collected_params.get("add_handle")):
         required.append("handle_sections")
+        required.append("handle_side")
         if shape_value in {"Г-образная", "П-образная"}:
             required.append("handle_wall")
     return [key for key in required if collected_params.get(key) in (None, "")]
@@ -81,6 +82,7 @@ def format_summary(collected_params: dict[str, Any]) -> str:
         "cols_right": "Колонки правой стены",
         "frame_thickness": "Толщина рамы",
         "add_handle": "Ручка",
+        "handle_side": "Сторона ручки",
         "handle_wall": "Стена ручки",
         "handle_sections": "Секции ручки",
     }

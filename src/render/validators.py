@@ -238,7 +238,11 @@ class PartitionValidator:
             style = params.get('handle_style')
             sections = params.get('handle_sections')
             wall = params.get('handle_wall')
-            
+            side = params.get('handle_side')
+
+            if side is not None and side not in ("inside", "outside", "both"):
+                return False, f"handle_side должен быть inside, outside или both (получено: {side!r})"
+
             if position not in ['Лево', 'Право', 'Центр']:
                 return False, "Недопустимая позиция ручки. Допустимые: Лево, Право, Центр"
             
