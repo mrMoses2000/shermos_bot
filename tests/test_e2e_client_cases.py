@@ -544,6 +544,8 @@ async def test_C11_manager_meas_confirm_telegram(
     meas_id = meas["id"]
 
     # Insert inbound event for client so _handle_measurement_callback can look it up
+    # (inbound_events has FK → processed_updates, so mark_update_received first)
+    await postgres.mark_update_received(pg_pool_integration, 1110011)
     await postgres.insert_inbound_event(
         pg_pool_integration, 1110011, CLIENT_CHAT_ID, CLIENT_CHAT_ID, "", {}
     )
@@ -609,6 +611,8 @@ async def test_C12_manager_meas_confirm_whatsapp(
     meas_id = meas["id"]
 
     # Insert client inbound event for notification lookup
+    # (inbound_events has FK → processed_updates, so mark_update_received first)
+    await postgres.mark_update_received(pg_pool_integration, 1120012)
     await postgres.insert_inbound_event(
         pg_pool_integration, 1120012, CLIENT_CHAT_ID, CLIENT_CHAT_ID, "", {}
     )
@@ -732,6 +736,8 @@ async def test_C14_manager_meas_reject(
     )
     meas_id = meas["id"]
 
+    # (inbound_events has FK → processed_updates, so mark_update_received first)
+    await postgres.mark_update_received(pg_pool_integration, 1140014)
     await postgres.insert_inbound_event(
         pg_pool_integration, 1140014, CLIENT_CHAT_ID, CLIENT_CHAT_ID, "", {}
     )
