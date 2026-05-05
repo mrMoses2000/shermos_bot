@@ -61,9 +61,11 @@ def get_missing_params(collected_params: dict[str, Any], shape: str | None = Non
         ])
     if _is_truthy(collected_params.get("add_handle")):
         required.append("handle_sections")
-        required.append("handle_side")
         if shape_value in {"Г-образная", "П-образная"}:
             required.append("handle_wall")
+        # handle_side is NOT required: render falls back to "inside" if missing.
+        # The LLM is encouraged to ask the client (especially for showers, where
+        # "outside" is more comfortable), but no need to block the render.
     return [key for key in required if collected_params.get(key) in (None, "")]
 
 

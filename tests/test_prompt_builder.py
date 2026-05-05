@@ -180,8 +180,9 @@ def test_build_prompt_warns_not_to_rerender_existing_order():
     assert "НЕ вызывай render_partition повторно" in prompt
 
 
-def test_missing_params_section_requires_handle_side_when_handle_enabled():
-    """Phase 12: prompt must ask for handle_side when add_handle is True."""
+def test_missing_params_section_does_not_block_on_handle_side():
+    """handle_side is optional in the missing-params list.
+    With everything else set, no required field remains."""
     section = _missing_params_section(
         {
             "collected_params": {
@@ -199,7 +200,8 @@ def test_missing_params_section_requires_handle_side_when_handle_enabled():
             }
         }
     )
-    assert "inside" in section or "outside" in section or "сторона ручки" in section.lower()
+    # No required fields are missing — section reflects "all set" state
+    assert "handle_side" not in section
 
 
 def test_slots_section_with_data():

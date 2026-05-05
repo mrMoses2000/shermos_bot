@@ -52,7 +52,8 @@ def test_missing_render_params_requires_handle_location_when_handle_enabled():
 
     assert "handle_sections" in missing
     assert "handle_wall" in missing
-    assert "handle_side" in missing
+    # handle_side is optional (defaults to "inside" in render); should NOT block render
+    assert "handle_side" not in missing
 
 
 def test_merge_render_params_preserves_current_order_draft_values():
@@ -63,8 +64,10 @@ def test_merge_render_params_preserves_current_order_draft_values():
 
     assert merged == {"shape": "Г-образная", "shape_side": "left", "height": 2, "width_a": 3, "width_b": 1, "glass_type": "1", "frame_color": "1", "matting": "none", "partition_type": "sliding_2", "handle_position": "Право"}
 
-def test_missing_render_params_requires_handle_side_when_handle_enabled():
-    """Phase 12: handle_side must be required when add_handle is True."""
+def test_handle_side_is_optional_when_handle_enabled():
+    """handle_side is optional — render falls back to "inside" if absent.
+    The LLM is encouraged to ask the client (especially showers, where "outside"
+    is more comfortable), but missing handle_side must NOT block the render."""
     missing = missing_render_params(
         {
             "shape": "Прямая",
@@ -80,7 +83,8 @@ def test_missing_render_params_requires_handle_side_when_handle_enabled():
             "handle_sections": [2],
         }
     )
-    assert "handle_side" in missing
+    assert "handle_side" not in missing
+    assert missing == [], f"All required fields satisfied; got missing={missing}"
 
 
 def test_handle_side_not_required_when_no_handle():
