@@ -5,6 +5,7 @@ import signal
 
 from src.queue.worker import run_worker
 from src.utils.logger import setup_logger
+from src.utils.watchdog import notify_ready, notify_stopping, run_watchdog_loop
 
 logger = setup_logger(__name__)
 
@@ -25,12 +26,16 @@ async def _main() -> None:
             # Windows doesn't support SIGTERM via add_signal_handler
             pass
 
+    notify_ready()
     main_task = asyncio.create_task(run_worker())
+    watchdog_task = asyncio.create_task(run_watchdog_loop(30))
     stop_task = asyncio.create_task(stop_event.wait())
     done, _pending = await asyncio.wait(
         {main_task, stop_task},
         return_when=asyncio.FIRST_COMPLETED,
     )
+    notify_stopping()
+    watchdog_task.cancel()
     if stop_task in done:
         main_task.cancel()
         try:

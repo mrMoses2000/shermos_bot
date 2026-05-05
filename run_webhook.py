@@ -14,6 +14,7 @@ from src.config import settings
 from src.db import postgres
 from src.db.redis_client import RedisClient
 from src.utils.logger import setup_logger
+from src.utils.watchdog import notify_ready, notify_stopping, run_watchdog_loop
 
 logger = setup_logger(__name__)
 
@@ -78,7 +79,11 @@ async def main() -> None:
             # Windows doesn't support SIGTERM via add_signal_handler
             pass
 
+    notify_ready()
+    watchdog_task = asyncio.create_task(run_watchdog_loop(30))
     await stop_event.wait()
+    notify_stopping()
+    watchdog_task.cancel()
     logger.info("webhook_shutdown_complete")
     await runner.cleanup()
 
