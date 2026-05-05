@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import hmac
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -40,14 +42,34 @@ def normalize_phone(phone: str) -> str:
     return re.sub(r"\D+", "", phone)
 
 
+def _get_client_ip(request: Request) -> str:
+    """Return the client IP, falling back to 'unknown' when behind a proxy without forwarded headers."""
+    host = request.client.host if request.client else None
+    return host or "unknown"
+
+
 @router.post("/otp/send")
-async def send_otp(body: OtpRequest, pool=Depends(get_pool)):
+async def send_otp(body: OtpRequest, request: Request, pool=Depends(get_pool)):
     phone = normalize_phone(body.phone)
     if not phone:
         raise HTTPException(status_code=400, detail="Invalid phone number")
 
     # Generic response for privacy
     success_resp = {"ok": True, "message": "If the phone is registered, an OTP has been sent."}
+
+    # Redis IP-based rate limit on send: 10/60s
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is not None:
+        ip = _get_client_ip(request)
+        allowed, _ = await redis_client.rate_limit_check(
+            f"rl:otp_send:ip:{ip}", limit=10, window_seconds=60
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests",
+                headers={"Retry-After": "60"},
+            )
 
     manager = await postgres.get_manager(pool, phone)
     if not manager or not manager.get("is_active"):
@@ -93,8 +115,26 @@ async def send_otp(body: OtpRequest, pool=Depends(get_pool)):
 
 
 @router.post("/otp/verify")
-async def verify_otp_route(body: OtpVerify, response: Response, pool=Depends(get_pool)):
+async def verify_otp_route(body: OtpVerify, request: Request, response: Response, pool=Depends(get_pool)):
     phone = normalize_phone(body.phone)
+
+    # Redis rate limits: 5/60s per phone, 20/60s per IP
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is not None:
+        ip = _get_client_ip(request)
+        phone_allowed, _ = await redis_client.rate_limit_check(
+            f"rl:otp_verify:phone:{phone}", limit=5, window_seconds=60
+        )
+        ip_allowed, _ = await redis_client.rate_limit_check(
+            f"rl:otp_verify:ip:{ip}", limit=20, window_seconds=60
+        )
+        if not phone_allowed or not ip_allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many attempts",
+                headers={"Retry-After": "60"},
+            )
+
     otp = await postgres.get_otp(pool, phone)
     if not otp:
         raise HTTPException(status_code=401, detail="OTP not found or expired")

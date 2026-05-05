@@ -130,3 +130,18 @@ class RedisClient:
 
     async def delete_cached(self, key: str) -> None:
         await self._require_client().delete(key)
+
+    async def rate_limit_check(
+        self, key: str, limit: int, window_seconds: int
+    ) -> tuple[bool, int]:
+        """Fixed-window rate limiter. Returns (allowed, current_count).
+
+        On the first hit within a window the key is created with a TTL of
+        *window_seconds*.  Subsequent increments reuse the existing TTL so the
+        window does not slide — it resets after the initial expiry.
+        """
+        client = self._require_client()
+        count = await client.incr(key)
+        if count == 1:
+            await client.expire(key, window_seconds)
+        return (count <= limit, count)
