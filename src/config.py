@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     transcription_language: str = "ru"
     transcription_timeout_seconds: int = 180
 
+    gemini_health_check_seconds: int = 1800
+
     log_level: str = "INFO"
     log_format: str = "json"
 
