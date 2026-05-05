@@ -304,8 +304,9 @@ async def test_render_reuse_rejects_stale_rendered_order_when_params_changed(mon
                 "frame_color": "1",
                 "matting": "none",
                 "add_handle": False,
-                "rows": 1,
-                "cols": 2,
+                # Per-wall grids replace top-level rows/cols for L/U shapes.
+                "rows_front": 1, "cols_front": 2,
+                "rows_side": 1, "cols_side": 1,
             },
             "state_patch": {"mode": "rendering", "step": "ask_time", "collected_params": {"_rendered_order_id": "order-1"}},
         },

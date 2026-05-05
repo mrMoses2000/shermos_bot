@@ -39,15 +39,26 @@ def get_missing_params(collected_params: dict[str, Any], shape: str | None = Non
         "frame_color",
         "matting",
         "add_handle",
-        "rows",
-        "cols",
     ]
-    if shape_value in {"Г-образная", "П-образная"}:
-        required.append("width_b")
-    if shape_value == "Г-образная":
-        required.append("shape_side")
-    if shape_value == "П-образная":
-        required.append("width_c")
+    # Section grids depend on shape:
+    #   - Прямая: top-level rows + cols
+    #   - Г-образная: rows_front + cols_front + rows_side + cols_side (+ width_b, shape_side)
+    #   - П-образная: rows_front/cols_front + rows_left/cols_left + rows_right/cols_right (+ width_b, width_c)
+    if shape_value == "Прямая":
+        required.extend(["rows", "cols"])
+    elif shape_value == "Г-образная":
+        required.extend([
+            "rows_front", "cols_front",
+            "rows_side", "cols_side",
+            "width_b", "shape_side",
+        ])
+    elif shape_value == "П-образная":
+        required.extend([
+            "rows_front", "cols_front",
+            "rows_left", "cols_left",
+            "rows_right", "cols_right",
+            "width_b", "width_c",
+        ])
     if _is_truthy(collected_params.get("add_handle")):
         required.append("handle_sections")
         required.append("handle_side")

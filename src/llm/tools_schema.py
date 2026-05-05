@@ -11,12 +11,16 @@ def get_tools_schema() -> str:
 
 1. render_partition — создать 3D-рендер и расчет.
    Вызывай только после явного подтверждения клиента и только когда все обязательные поля собраны.
-   Поля: shape, partition_type, height, width_a, glass_type, frame_color, matting, add_handle, rows, cols.
+   Базовые поля: shape, partition_type, height, width_a, glass_type, frame_color, matting, add_handle.
+
+   СЕКЦИИ — зависят от формы (это разные параметры, НЕ дублируй их):
+   - Прямая: rows + cols (одна стена).
+   - Г-образная: rows_front + cols_front + rows_side + cols_side + width_b + shape_side ("left"|"right"). НЕ передавай rows/cols.
+   - П-образная: rows_front+cols_front + rows_left+cols_left + rows_right+cols_right + width_b + width_c. НЕ передавай rows/cols.
+
    Для Прямой формы: дверь по центру в 3 секциях означает door_section=2 и door_wall="front". Ручка тоже на "front".
-   Для Г-образной добавь width_b и shape_side ("left"|"right"). Для П-образной добавь width_b и width_c.
    Если нужна ручка: handle_sections обязателен, а для Г/П формы ещё handle_wall ("front"|"side"|"left"|"right").
    handle_side: "inside" (внутри помещения), "outside" (снаружи) или "both" (с обеих сторон). Для душевых перегородок чаще "outside" — дверь открывается на себя.
-   Для сложных форм секции по сторонам храни в cols_front/cols_side/cols_left/cols_right и rows_*.
 
 2. schedule_measurement — СОЗДАТЬ новую запись на замер. Только если у клиента ещё НЕТ активного замера (т.е. в state.collected_params._measurement_id отсутствует).
    Поля: date YYYY-MM-DD, time HH:MM, client_name, phone, address.

@@ -23,8 +23,9 @@ def test_missing_render_params_requires_l_shape_side():
             "frame_color": "1",
             "matting": "none",
             "add_handle": False,
-            "rows": 1,
-            "cols": 2,
+            # Per-wall grids: top-level rows/cols are only required for Прямая form.
+            "rows_front": 1, "cols_front": 2,
+            "rows_side": 1, "cols_side": 1,
         }
     )
 
