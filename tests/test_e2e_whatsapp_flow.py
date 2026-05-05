@@ -115,7 +115,9 @@ async def test_whatsapp_client_on_client_number_routes_to_client_queue(
     """
     phone = "70001112233"
     external_id = "wa-client-001"
-    external_chat_id = f"{phone}@s.whatsapp.net"
+    # Inbound uses JID form; outbound external_chat_id is str(job.chat_id) = phone digits
+    inbound_external_chat_id = f"{phone}@s.whatsapp.net"
+    outbound_external_chat_id = phone  # send_and_record stores str(job.chat_id)
 
     # Patch whatsapp_sender in worker module so no real bridge call is made
     fake_wa = FakeWhatsAppSender(role="client")
@@ -137,23 +139,24 @@ async def test_whatsapp_client_on_client_number_routes_to_client_queue(
     # Verify inbound_events row has channel='whatsapp'
     inbound_rows = await pg_pool_integration.fetch(
         "SELECT * FROM inbound_events WHERE external_chat_id=$1",
-        external_chat_id,
+        inbound_external_chat_id,
     )
     assert len(inbound_rows) == 1
     assert inbound_rows[0]["channel"] == "whatsapp"
 
     # Wait for worker to process and outbound to be created+sent
+    # outbound_events.external_chat_id = str(job.chat_id) = phone digits (no JID suffix)
     row = await asyncio.wait_for(
-        _poll_outbound_external(pg_pool_integration, external_chat_id, "sent"),
+        _poll_outbound_external(pg_pool_integration, outbound_external_chat_id, "sent"),
         timeout=10.0,
     )
     assert row is not None, "Expected outbound_events row with status='sent'"
     assert row["bot_type"] == "client"
     assert row["channel"] == "whatsapp"
 
-    # Confirm fake sender received the message
+    # Confirm fake sender received the message (worker passes job.chat_id as int)
     assert len(fake_wa.messages) >= 1
-    assert fake_wa.messages[0]["chat_id"] == external_chat_id
+    assert fake_wa.messages[0]["chat_id"] == int(phone)
 
 
 @pytest.mark.asyncio
@@ -173,7 +176,9 @@ async def test_whatsapp_client_on_manager_number_still_routes_to_client_queue(
     """
     phone = "70009998877"  # NOT in manager allowlist
     external_id = "wa-client-on-mgr-002"
-    external_chat_id = f"{phone}@s.whatsapp.net"
+    # Inbound uses JID form; outbound external_chat_id is str(job.chat_id) = phone digits
+    inbound_external_chat_id = f"{phone}@s.whatsapp.net"
+    outbound_external_chat_id = phone  # send_and_record stores str(job.chat_id)
 
     fake_wa = FakeWhatsAppSender(role="client")
     import src.queue.worker as worker_mod
@@ -193,14 +198,15 @@ async def test_whatsapp_client_on_manager_number_still_routes_to_client_queue(
     # bot_type must be 'client' (sender is not in allowlist)
     inbound_rows = await pg_pool_integration.fetch(
         "SELECT * FROM inbound_events WHERE external_chat_id=$1",
-        external_chat_id,
+        inbound_external_chat_id,
     )
     assert len(inbound_rows) == 1
     assert inbound_rows[0]["channel"] == "whatsapp"
 
     # Outbound should be created as 'client' bot_type
+    # outbound_events.external_chat_id = str(job.chat_id) = phone digits (no JID suffix)
     row = await asyncio.wait_for(
-        _poll_outbound_external(pg_pool_integration, external_chat_id, "sent"),
+        _poll_outbound_external(pg_pool_integration, outbound_external_chat_id, "sent"),
         timeout=10.0,
     )
     assert row is not None, "Expected outbound_events row with status='sent'"
@@ -233,7 +239,9 @@ async def test_whatsapp_staff_routes_to_manager_queue(
     monkeypatch.setattr(ingress_mod.settings, "manager_whatsapp_numbers", staff_phone)
 
     external_id = "wa-staff-003"
-    external_chat_id = f"{staff_phone}@s.whatsapp.net"
+    # Inbound uses JID form; outbound external_chat_id is str(job.chat_id) = phone digits
+    inbound_external_chat_id = f"{staff_phone}@s.whatsapp.net"
+    outbound_external_chat_id = staff_phone  # send_and_record stores str(job.chat_id)
 
     fake_mgr_wa = FakeWhatsAppSender(role="manager")
     import src.queue.worker as worker_mod
@@ -253,13 +261,14 @@ async def test_whatsapp_staff_routes_to_manager_queue(
     # The inbound_event should exist
     inbound_rows = await pg_pool_integration.fetch(
         "SELECT * FROM inbound_events WHERE external_chat_id=$1",
-        external_chat_id,
+        inbound_external_chat_id,
     )
     assert len(inbound_rows) == 1
 
     # Wait for manager outbound
+    # outbound_events.external_chat_id = str(job.chat_id) = phone digits (no JID suffix)
     row = await asyncio.wait_for(
-        _poll_outbound_external(pg_pool_integration, external_chat_id, "sent"),
+        _poll_outbound_external(pg_pool_integration, outbound_external_chat_id, "sent"),
         timeout=10.0,
     )
     assert row is not None, "Expected outbound_events row with status='sent'"

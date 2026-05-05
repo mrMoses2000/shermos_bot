@@ -60,9 +60,10 @@ async def redis_client_integration():
 async def reset_integration_db(pg_pool_integration, redis_client_integration):
     """Truncate all tables and clear test:* Redis keys before each test."""
     await pg_pool_integration.execute(
-        "TRUNCATE inbound_events, outbound_events, conversation_state, "
+        "TRUNCATE clients, inbound_events, outbound_events, conversation_state, "
         "processed_updates, measurements, measurement_slots, "
-        "gallery_works, gallery_photos RESTART IDENTITY CASCADE"
+        "gallery_works, gallery_photos, "
+        "managers, auth_otps, auth_otp_rate_limit RESTART IDENTITY CASCADE"
     )
     cursor = 0
     while True:
@@ -214,11 +215,10 @@ def mock_call_llm(monkeypatch):
     import src.queue.worker as worker_mod
     monkeypatch.setattr(worker_mod, "call_llm", _fake_call_llm)
 
-    # Also patch the apply_actions to avoid render/pricing side-effects
-    async def _fake_apply_actions(*_args, **_kwargs):
-        return {"render_paths": None, "price": None, "calendar_event": None, "order": None}
-
-    monkeypatch.setattr(worker_mod, "apply_actions", _fake_apply_actions)
+    # NOTE: apply_actions is NOT mocked here so that state_patch / state updates
+    # from the fake LLM response are correctly persisted to the DB.
+    # Tests that need full isolation from render/pricing side-effects should
+    # monkeypatch apply_actions locally (as C07/C08 already do).
     return responses
 
 
