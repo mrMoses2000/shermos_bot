@@ -285,12 +285,38 @@ async def mark_outbound_failed(pool, event_id: int, error: str) -> None:
         UPDATE outbound_events
         SET attempts=attempts+1,
             last_attempt_at=now(),
-            error_message=$2,
+            error_message=LEFT(
+                COALESCE(error_message, '') ||
+                CASE WHEN error_message IS NULL OR error_message = '' THEN '' ELSE E'\n' END ||
+                '[' || (attempts + 1)::text || '] ' || $2,
+                2000
+            ),
             status=CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'pending' END
         WHERE id=$1
         """,
         event_id,
-        error[:2000],
+        error[:500],
+    )
+
+
+async def mark_outbound_dead(pool, event_id: int, error: str) -> None:
+    """Immediately mark an event as permanently failed (no retry)."""
+    await pool.execute(
+        """
+        UPDATE outbound_events
+        SET attempts=attempts+1,
+            last_attempt_at=now(),
+            error_message=LEFT(
+                COALESCE(error_message, '') ||
+                CASE WHEN error_message IS NULL OR error_message = '' THEN '' ELSE E'\n' END ||
+                '[' || (attempts + 1)::text || '] ' || $2,
+                2000
+            ),
+            status='failed'
+        WHERE id=$1
+        """,
+        event_id,
+        error[:500],
     )
 
 

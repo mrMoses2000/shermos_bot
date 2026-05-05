@@ -10,7 +10,11 @@ from typing import Any
 
 import aiohttp
 
+from src.bot.errors import PermanentSendError
 from src.config import settings
+
+# 4xx codes that are transient (will eventually resolve).
+_TRANSIENT_4XX = {408, 429}
 
 
 def _plain_text(text: str) -> str:
@@ -110,6 +114,9 @@ class WhatsAppSender:
         async with self._require_session().post(self._url(path), json=payload, headers=headers) as response:
             data = await response.json(content_type=None)
             if response.status >= 400:
+                status = response.status
+                if 400 <= status < 500 and status not in _TRANSIENT_4XX:
+                    raise PermanentSendError(status, str(data))
                 raise RuntimeError(f"WhatsApp bridge {path} failed: {data}")
             return data
 

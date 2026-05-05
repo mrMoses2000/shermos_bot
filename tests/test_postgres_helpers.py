@@ -140,3 +140,40 @@ async def test_price_material_and_dashboard_queries():
     pool.fetch_result = [{"status": "new", "count": 3}]
     assert await postgres.count_orders_by_status(pool) == {"new": 3}
     assert (await postgres.get_dashboard_stats(pool))["pending_measurements"] == 2
+
+
+@pytest.mark.asyncio
+async def test_mark_outbound_failed_appends_error_history():
+    """mark_outbound_failed SQL must append to error_message, not overwrite."""
+    pool = FakePool()
+
+    await postgres.mark_outbound_failed(pool, 1, "first error")
+    await postgres.mark_outbound_failed(pool, 1, "second error")
+
+    assert len(pool.calls) == 2
+    for op, query, args in pool.calls:
+        assert op == "execute"
+        # SQL contains the append/LEFT pattern
+        assert "COALESCE(error_message" in query
+        assert "LEFT(" in query
+        # status can flip to failed
+        assert "CASE WHEN attempts" in query
+    # Both calls use event_id=1
+    assert pool.calls[0][2][0] == 1
+    assert pool.calls[1][2][0] == 1
+
+
+@pytest.mark.asyncio
+async def test_mark_outbound_dead_sets_status_failed_immediately():
+    """mark_outbound_dead must set status='failed' unconditionally."""
+    pool = FakePool()
+
+    await postgres.mark_outbound_dead(pool, 5, "[403] Forbidden: bot was blocked by the user")
+
+    assert len(pool.calls) == 1
+    op, query, args = pool.calls[0]
+    assert op == "execute"
+    assert "status='failed'" in query
+    # Must NOT include the conditional CASE … WHEN attempts … pattern
+    assert "CASE WHEN attempts" not in query
+    assert args[0] == 5

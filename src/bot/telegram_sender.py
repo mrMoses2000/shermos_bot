@@ -8,6 +8,11 @@ from typing import Any
 
 import aiohttp
 
+from src.bot.errors import PermanentSendError
+
+# Telegram error codes that are permanent (won't resolve on retry).
+_PERMANENT_TELEGRAM_ERROR_CODES = {400, 401, 403}
+
 
 class TelegramSender:
     def __init__(self) -> None:
@@ -30,18 +35,26 @@ class TelegramSender:
     def _url(self, token: str, method: str) -> str:
         return f"https://api.telegram.org/bot{token}/{method}"
 
+    def _check_response(self, method: str, http_status: int, data: dict[str, Any]) -> None:
+        """Raise an appropriate exception when the Telegram response signals failure."""
+        if data.get("ok", False) and http_status < 400:
+            return
+        error_code: int | None = data.get("error_code")
+        description: str = data.get("description", str(data))
+        if error_code in _PERMANENT_TELEGRAM_ERROR_CODES:
+            raise PermanentSendError(error_code, description)
+        raise RuntimeError(f"Telegram {method} failed: {data}")
+
     async def _post_json(self, token: str, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         async with self._require_session().post(self._url(token, method), json=payload) as response:
             data = await response.json(content_type=None)
-            if response.status >= 400 or not data.get("ok", False):
-                raise RuntimeError(f"Telegram {method} failed: {data}")
+            self._check_response(method, response.status, data)
             return data
 
     async def _post_form(self, token: str, method: str, form: aiohttp.FormData) -> dict[str, Any]:
         async with self._require_session().post(self._url(token, method), data=form) as response:
             data = await response.json(content_type=None)
-            if response.status >= 400 or not data.get("ok", False):
-                raise RuntimeError(f"Telegram {method} failed: {data}")
+            self._check_response(method, response.status, data)
             return data
 
     async def send_message(

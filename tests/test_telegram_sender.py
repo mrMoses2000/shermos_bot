@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from src.bot.errors import PermanentSendError
 from src.bot.telegram_sender import TelegramSender
 
 
@@ -228,3 +229,74 @@ async def test_post_json_raises_on_telegram_error(monkeypatch):
 
     with pytest.raises(RuntimeError):
         await sender._post_json("tok", "sendMessage", {})
+
+
+def _make_fake_session(status: int, body: dict):
+    """Build a minimal FakeSession that returns the given HTTP status + body."""
+
+    class FakeResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def json(self, content_type=None):
+            return body
+
+    FakeResponse.status = status
+
+    class FakeSession:
+        closed = False
+
+        def post(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    return FakeSession()
+
+
+@pytest.mark.asyncio
+async def test_post_json_raises_permanent_error_on_403():
+    body = {"ok": False, "error_code": 403, "description": "Forbidden: bot was blocked by the user"}
+    sender = TelegramSender()
+    sender.session = _make_fake_session(403, body)
+
+    with pytest.raises(PermanentSendError) as exc_info:
+        await sender._post_json("tok", "sendMessage", {})
+
+    assert exc_info.value.error_code == 403
+    assert "blocked" in exc_info.value.description
+
+
+@pytest.mark.asyncio
+async def test_post_json_raises_permanent_error_on_400_chat_not_found():
+    body = {"ok": False, "error_code": 400, "description": "Bad Request: chat not found"}
+    sender = TelegramSender()
+    sender.session = _make_fake_session(200, body)
+
+    with pytest.raises(PermanentSendError) as exc_info:
+        await sender._post_json("tok", "sendMessage", {})
+
+    assert exc_info.value.error_code == 400
+
+
+@pytest.mark.asyncio
+async def test_post_json_raises_runtime_error_on_500():
+    body = {"ok": False, "error_code": 500, "description": "Internal Server Error"}
+    sender = TelegramSender()
+    sender.session = _make_fake_session(500, body)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await sender._post_json("tok", "sendMessage", {})
+
+    assert not isinstance(exc_info.value, PermanentSendError)
+
+
+@pytest.mark.asyncio
+async def test_post_json_returns_message_id_on_success():
+    body = {"ok": True, "result": {"message_id": 99}}
+    sender = TelegramSender()
+    sender.session = _make_fake_session(200, body)
+
+    result = await sender._post_json("tok", "sendMessage", {})
+    assert result["result"]["message_id"] == 99

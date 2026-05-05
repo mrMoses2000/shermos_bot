@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from src.bot.errors import PermanentSendError
 from src.queue import outbox_dispatcher
 from tests.helpers import FakeSender
 
@@ -138,3 +139,43 @@ async def test_dispatch_once_sends_manager_whatsapp_event_to_manager_bridge(monk
     assert sent == 1
     assert ("manager_send", "", "77067396626", "manager ok", "00000000-0000-4000-8000-000000000008") in calls
     assert ("sent", 8, None, "manager-wa-msg-8") in calls
+
+
+@pytest.mark.asyncio
+async def test_dispatch_once_calls_mark_dead_on_permanent_error(monkeypatch):
+    """PermanentSendError routes to mark_outbound_dead, not mark_outbound_failed."""
+    events = [
+        {"id": 42, "chat_id": 99, "bot_type": "client", "reply_text": "hi", "reply_markup": None},
+    ]
+    calls = []
+
+    async def fake_get_pending(_pool, limit=20):
+        return events
+
+    async def fake_mark_sent(_pool, event_id, telegram_message_id=None, external_message_id=None):
+        calls.append(("sent", event_id))
+
+    async def fake_mark_failed(_pool, event_id, error):
+        calls.append(("failed", event_id, error))
+
+    async def fake_mark_dead(_pool, event_id, error):
+        calls.append(("dead", event_id, error))
+
+    class BlockedSender(FakeSender):
+        async def send_message(self, token, chat_id, text, parse_mode="HTML", reply_markup=None):
+            raise PermanentSendError(403, "Forbidden: bot was blocked by the user")
+
+    monkeypatch.setattr(outbox_dispatcher.postgres, "get_pending_outbound", fake_get_pending)
+    monkeypatch.setattr(outbox_dispatcher.postgres, "mark_outbound_sent", fake_mark_sent)
+    monkeypatch.setattr(outbox_dispatcher.postgres, "mark_outbound_failed", fake_mark_failed)
+    monkeypatch.setattr(outbox_dispatcher.postgres, "mark_outbound_dead", fake_mark_dead)
+
+    sent = await outbox_dispatcher.dispatch_once(object(), BlockedSender())
+
+    assert sent == 0
+    dead_calls = [c for c in calls if c[0] == "dead"]
+    failed_calls = [c for c in calls if c[0] == "failed"]
+    assert len(dead_calls) == 1
+    assert dead_calls[0][1] == 42
+    assert "blocked" in dead_calls[0][2]
+    assert len(failed_calls) == 0
