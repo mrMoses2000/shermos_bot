@@ -26,8 +26,8 @@ def verify_otp(code: str, hashed: str) -> bool:
 
 
 def generate_otp_code() -> str:
-    # 6-digit numeric code
-    return "".join(secrets.choice("0123456789") for _ in range(6))
+    # 8-digit numeric code (10^8 space, significantly harder to brute-force)
+    return "".join(secrets.choice("0123456789") for _ in range(8))
 
 
 def create_access_token(data: dict) -> str:

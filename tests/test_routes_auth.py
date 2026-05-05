@@ -289,3 +289,15 @@ def test_logout_clears_both_cookies(client):
     # The cookie values should be empty strings (deleted)
     assert logout_resp.cookies.get("refresh_token", None) in (None, "")
     assert logout_resp.cookies.get("csrf_token", None) in (None, "")
+
+
+# ── Step 3.5: OTP hardening tests ────────────────────────────────────────────
+
+def test_generate_otp_code_returns_8_digits():
+    """generate_otp_code must return an 8-digit numeric string."""
+    from src.api.auth import generate_otp_code
+
+    for _ in range(20):
+        code = generate_otp_code()
+        assert len(code) == 8, f"Expected 8-digit code, got len={len(code)}: {code!r}"
+        assert code.isdigit(), f"Expected all digits, got: {code!r}"
