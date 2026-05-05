@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from src.api.auth import (
     create_access_token,
@@ -34,8 +34,10 @@ class OtpRequest(BaseModel):
 
 
 class OtpVerify(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     phone: str
-    code: str
+    code: str = Field(validation_alias=AliasChoices("code", "otp"))
 
 
 def normalize_phone(phone: str) -> str:
@@ -48,6 +50,7 @@ def _get_client_ip(request: Request) -> str:
     return host or "unknown"
 
 
+@router.post("/otp/request", include_in_schema=False)
 @router.post("/otp/send")
 async def send_otp(body: OtpRequest, request: Request, pool=Depends(get_pool)):
     phone = normalize_phone(body.phone)

@@ -131,6 +131,12 @@ def test_send_otp_success(client):
     assert response.json()["ok"] is True
 
 
+def test_send_otp_request_alias_success(client):
+    response = client.post("/api/auth/otp/request", json={"phone": "77067396626"})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
 def test_verify_otp_success(client):
     response = client.post(
         "/api/auth/otp/verify", json={"phone": "77067396626", "code": "12345678"}
@@ -138,6 +144,14 @@ def test_verify_otp_success(client):
     assert response.status_code == 200
     assert "access_token" in response.json()
     assert response.json()["manager"]["phone"] == "77067396626"
+
+
+def test_verify_otp_accepts_legacy_otp_payload(client):
+    response = client.post(
+        "/api/auth/otp/verify", json={"phone": "77067396626", "otp": "12345678"}
+    )
+    assert response.status_code == 200
+    assert "access_token" in response.json()
 
 
 def test_verify_otp_invalid_code(client, monkeypatch):

@@ -175,7 +175,7 @@ export async function apiUpload<T>(
 
 /** Request a WhatsApp OTP for the given phone number. */
 export async function requestOtp(phone: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/auth/otp/request`, {
+  const res = await fetch(`${API_BASE}/api/auth/otp/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ phone }),
@@ -189,7 +189,7 @@ export async function verifyOtp(phone: string, otp: string): Promise<string> {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone, otp }),
+    body: JSON.stringify({ phone, code: otp }),
   });
   if (!res.ok) throw new Error(`OTP verify failed: ${res.status}`);
   const data = (await res.json()) as { access_token: string };
