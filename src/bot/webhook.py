@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 from aiohttp import web
 
 from src.config import settings
@@ -52,7 +54,7 @@ def _extract_update(update: dict) -> tuple[int, int, str, str, str]:
 async def _process_webhook(request: web.Request, bot_type: str, secret_token: str) -> web.Response:
     try:
         incoming_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if incoming_secret != secret_token:
+        if not hmac.compare_digest(incoming_secret, secret_token):
             logger.warning("webhook_secret_mismatch", extra={"bot_type": bot_type})
             return web.json_response({"ok": True})
 

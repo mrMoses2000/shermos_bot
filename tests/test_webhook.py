@@ -1,3 +1,5 @@
+import hmac
+
 import pytest
 
 from src.bot import webhook
@@ -65,6 +67,31 @@ async def test_process_webhook_ignores_bad_secret(monkeypatch):
     response = await webhook._process_webhook(request, "client", "client-secret")
 
     assert response.status == 200
+
+
+def test_webhook_uses_compare_digest():
+    """2.4 — webhook.py must use hmac.compare_digest for secret comparison."""
+    import inspect
+    import src.bot.webhook as wh_module
+    source = inspect.getsource(wh_module._process_webhook)
+    assert "compare_digest" in source, "Secret comparison must use hmac.compare_digest"
+    assert "hmac" in source, "hmac module must be referenced in _process_webhook"
+
+
+@pytest.mark.asyncio
+async def test_process_webhook_wrong_secret_returns_ok_without_enqueue(monkeypatch):
+    """2.4 — wrong secret returns 200 but does not enqueue any job."""
+
+    async def fail_if_called(*_args):
+        raise AssertionError("should not reach DB with wrong secret")
+
+    monkeypatch.setattr(webhook.postgres, "mark_update_received", fail_if_called)
+    request = FakeRequest({"update_id": 42, "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": "hi"}}, secret="WRONG")
+
+    response = await webhook._process_webhook(request, "client", "CORRECT")
+
+    assert response.status == 200
+    assert request.app["redis"].jobs == []
 
 
 def test_extract_update_callback_and_photo():
