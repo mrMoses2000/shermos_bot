@@ -159,11 +159,20 @@ async def verify_otp_route(body: OtpVerify, request: Request, response: Response
     user_data = {"sub": phone, "name": manager.get("name")}
     access_token = create_access_token(user_data)
     refresh_token = create_refresh_token(user_data)
+    csrf_token = secrets.token_urlsafe(32)
 
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=settings.jwt_refresh_ttl_days * 24 * 3600,
+    )
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,
         secure=True,
         samesite="none",
         max_age=settings.jwt_refresh_ttl_days * 24 * 3600,
@@ -181,6 +190,14 @@ async def verify_otp_route(body: OtpVerify, request: Request, response: Response
 
 @router.post("/refresh")
 async def refresh_token_route(request: Request, response: Response):
+    # CSRF double-submit check: cookie value must match X-CSRF-Token header
+    cookie_csrf = request.cookies.get("csrf_token")
+    header_csrf = request.headers.get("X-CSRF-Token")
+    if not cookie_csrf or not header_csrf:
+        raise HTTPException(status_code=403, detail="Missing CSRF token")
+    if not hmac.compare_digest(cookie_csrf, header_csrf):
+        raise HTTPException(status_code=403, detail="CSRF token mismatch")
+
     refresh_token = request.cookies.get("refresh_token")
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Missing refresh token")
@@ -191,13 +208,24 @@ async def refresh_token_route(request: Request, response: Response):
 
     user_data = {"sub": payload["sub"], "name": payload.get("name")}
     access_token = create_access_token(user_data)
-    
-    # Optional: Rotate refresh token
+
+    # Rotate refresh token
     new_refresh_token = create_refresh_token(user_data)
     response.set_cookie(
         key="refresh_token",
         value=new_refresh_token,
         httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=settings.jwt_refresh_ttl_days * 24 * 3600,
+    )
+
+    # Rotate csrf_token
+    new_csrf_token = secrets.token_urlsafe(32)
+    response.set_cookie(
+        key="csrf_token",
+        value=new_csrf_token,
+        httponly=False,
         secure=True,
         samesite="none",
         max_age=settings.jwt_refresh_ttl_days * 24 * 3600,
@@ -209,4 +237,5 @@ async def refresh_token_route(request: Request, response: Response):
 @router.post("/logout")
 async def logout(response: Response):
     response.delete_cookie("refresh_token")
+    response.delete_cookie("csrf_token")
     return {"ok": True}

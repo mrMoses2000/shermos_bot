@@ -57,8 +57,12 @@ class FakeRedisPhoneLimited:
         pass
 
 
-def _make_client(monkeypatch, redis_state=None, otp_code="12345678"):
-    """Build a TestClient with mocked DB and optional Redis state."""
+def _make_client(monkeypatch, redis_state=None, otp_code="12345678", https=False):
+    """Build a TestClient with mocked DB and optional Redis state.
+
+    Pass https=True to use https://testserver as base URL so that Secure cookies
+    are included in subsequent requests (needed for CSRF tests).
+    """
     app = create_app()
     app.state.pg_pool = FakePool()
     if redis_state is not None:
@@ -104,12 +108,19 @@ def _make_client(monkeypatch, redis_state=None, otp_code="12345678"):
     monkeypatch.setattr(routes_auth.manager_whatsapp_sender, "send_message", send_message)
     monkeypatch.setattr(routes_auth.manager_whatsapp_sender, "start", lambda: None)
 
-    return TestClient(app, raise_server_exceptions=False)
+    base_url = "https://testserver" if https else "http://testserver"
+    return TestClient(app, raise_server_exceptions=False, base_url=base_url)
 
 
 @pytest.fixture
 def client(monkeypatch):
     return _make_client(monkeypatch, redis_state=FakeRedisUnlimited(), otp_code="12345678")
+
+
+@pytest.fixture
+def https_client(monkeypatch):
+    """TestClient with https://testserver base so Secure cookies are sent back."""
+    return _make_client(monkeypatch, redis_state=FakeRedisUnlimited(), otp_code="12345678", https=True)
 
 
 # ── Original tests (updated to 8-digit OTP code) ────────────────────────────
@@ -218,40 +229,39 @@ def test_verify_otp_sets_csrf_cookie(client):
     )
     assert response.status_code == 200
     cookies = response.cookies
-    # Both cookies must be present
+    # Both cookies must be present in the Set-Cookie response headers
     assert "refresh_token" in cookies, "refresh_token cookie missing"
     assert "csrf_token" in cookies, "csrf_token cookie missing"
 
 
-def test_refresh_without_csrf_header_is_403(client):
+def test_refresh_without_csrf_header_is_403(https_client):
     """Calling /refresh without X-CSRF-Token header should return 403."""
-    # First get a valid refresh token + csrf cookie via verify
-    verify_resp = client.post(
+    verify_resp = https_client.post(
         "/api/auth/otp/verify", json={"phone": "77067396626", "code": "12345678"}
     )
     assert verify_resp.status_code == 200
 
     # Now call /refresh without CSRF header (cookies are sent automatically by TestClient)
-    refresh_resp = client.post("/api/auth/refresh")
+    refresh_resp = https_client.post("/api/auth/refresh")
     assert refresh_resp.status_code == 403
 
 
-def test_refresh_with_wrong_csrf_token_is_403(client):
+def test_refresh_with_wrong_csrf_token_is_403(https_client):
     """Calling /refresh with mismatched X-CSRF-Token should return 403."""
-    verify_resp = client.post(
+    verify_resp = https_client.post(
         "/api/auth/otp/verify", json={"phone": "77067396626", "code": "12345678"}
     )
     assert verify_resp.status_code == 200
 
-    refresh_resp = client.post(
+    refresh_resp = https_client.post(
         "/api/auth/refresh", headers={"X-CSRF-Token": "completely-wrong-token"}
     )
     assert refresh_resp.status_code == 403
 
 
-def test_refresh_with_correct_csrf_token_is_200(client):
+def test_refresh_with_correct_csrf_token_is_200(https_client):
     """Calling /refresh with matching X-CSRF-Token returns 200 + new access_token + rotated csrf cookie."""
-    verify_resp = client.post(
+    verify_resp = https_client.post(
         "/api/auth/otp/verify", json={"phone": "77067396626", "code": "12345678"}
     )
     assert verify_resp.status_code == 200
@@ -259,7 +269,7 @@ def test_refresh_with_correct_csrf_token_is_200(client):
     csrf_token = verify_resp.cookies.get("csrf_token")
     assert csrf_token, "csrf_token cookie should be set after verify"
 
-    refresh_resp = client.post(
+    refresh_resp = https_client.post(
         "/api/auth/refresh", headers={"X-CSRF-Token": csrf_token}
     )
     assert refresh_resp.status_code == 200
@@ -270,7 +280,7 @@ def test_refresh_with_correct_csrf_token_is_200(client):
 
 def test_logout_clears_both_cookies(client):
     """Logout should clear both refresh_token and csrf_token cookies."""
-    # First authenticate
+    # First authenticate (http client — just checking Set-Cookie response headers)
     client.post("/api/auth/otp/verify", json={"phone": "77067396626", "code": "12345678"})
 
     logout_resp = client.post("/api/auth/logout")
