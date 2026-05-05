@@ -239,13 +239,25 @@ async def worker_running(
     from src.queue.worker import _client_loop, _manager_loop
     from src.queue.outbox_dispatcher import run_outbox_dispatcher
 
-    # Patch module-level telegram_sender references so that worker code that uses
-    # `telegram_sender` directly (e.g. _handle_measurement_callback for client
-    # notifications) also uses the mock instead of the un-started real sender.
+    # Patch module-level sender references so that worker code that accesses
+    # senders directly (not via the `sender` argument) also uses mocks instead
+    # of the un-started real senders.
+    fake_wa_client = FakeWhatsAppSender(role="client")
+    fake_wa_manager = FakeWhatsAppSender(role="manager")
+
     orig_worker_tg = worker_mod.telegram_sender
     orig_common_tg = sender_common_mod.telegram_sender
+    orig_worker_wa = worker_mod.whatsapp_sender
+    orig_common_wa = sender_common_mod.whatsapp_sender
+    orig_worker_mgr_wa = worker_mod.manager_whatsapp_sender
+    orig_common_mgr_wa = sender_common_mod.manager_whatsapp_sender
+
     worker_mod.telegram_sender = mock_telegram_sender
     sender_common_mod.telegram_sender = mock_telegram_sender
+    worker_mod.whatsapp_sender = fake_wa_client
+    sender_common_mod.whatsapp_sender = fake_wa_client
+    worker_mod.manager_whatsapp_sender = fake_wa_manager
+    sender_common_mod.manager_whatsapp_sender = fake_wa_manager
 
     tasks = [
         asyncio.create_task(
@@ -268,3 +280,7 @@ async def worker_running(
         # Restore module-level senders
         worker_mod.telegram_sender = orig_worker_tg
         sender_common_mod.telegram_sender = orig_common_tg
+        worker_mod.whatsapp_sender = orig_worker_wa
+        sender_common_mod.whatsapp_sender = orig_common_wa
+        worker_mod.manager_whatsapp_sender = orig_worker_mgr_wa
+        sender_common_mod.manager_whatsapp_sender = orig_common_mgr_wa
