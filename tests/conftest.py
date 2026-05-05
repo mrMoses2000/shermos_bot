@@ -234,8 +234,18 @@ async def worker_running(
 
     Yields control to the test; cancels all tasks on teardown.
     """
+    import src.queue.worker as worker_mod
+    import src.bot.sender_common as sender_common_mod
     from src.queue.worker import _client_loop, _manager_loop
     from src.queue.outbox_dispatcher import run_outbox_dispatcher
+
+    # Patch module-level telegram_sender references so that worker code that uses
+    # `telegram_sender` directly (e.g. _handle_measurement_callback for client
+    # notifications) also uses the mock instead of the un-started real sender.
+    orig_worker_tg = worker_mod.telegram_sender
+    orig_common_tg = sender_common_mod.telegram_sender
+    worker_mod.telegram_sender = mock_telegram_sender
+    sender_common_mod.telegram_sender = mock_telegram_sender
 
     tasks = [
         asyncio.create_task(
@@ -255,3 +265,6 @@ async def worker_running(
             task.cancel()
         # Await cancellation without raising
         await asyncio.gather(*tasks, return_exceptions=True)
+        # Restore module-level senders
+        worker_mod.telegram_sender = orig_worker_tg
+        sender_common_mod.telegram_sender = orig_common_tg
