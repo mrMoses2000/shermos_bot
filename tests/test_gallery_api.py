@@ -91,8 +91,78 @@ def test_upload_oversize(fake_pool, monkeypatch):
         headers={"X-Telegram-Init-Data": signed_init_data()},
         files=[("files", ("test.png", PNG_1x1, "image/png"))]
     )
-    assert res.status_code == 400
+    assert res.status_code == 413
     assert "слишком большой" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_upload_oversize_declared_size(monkeypatch):
+    """Reject immediately when UploadFile.size > limit, before streaming body."""
+    import io
+    from fastapi import UploadFile, HTTPException
+    from starlette.datastructures import Headers
+    from src.config import settings
+    from src.api.routes_gallery import upload_photos
+    from tests.helpers import FakePool
+
+    monkeypatch.setattr(settings, "gallery_photo_max_bytes", 10)
+
+    # Craft an UploadFile whose .size is already over the limit.
+    # The route should raise 413 before ever calling file.read().
+    big_upload = UploadFile(
+        file=io.BytesIO(PNG_1x1),
+        size=9999,  # declared > limit of 10
+        filename="big.png",
+        headers=Headers({"content-type": "image/png"}),
+    )
+
+    # get_gallery_work does fetchrow + fetch, so provide both results
+    fake_pool = FakePool([
+        {"id": "w1", "partition_type": "fixed"},  # fetchrow for work
+        [],  # fetch for photos
+    ])
+
+    try:
+        await upload_photos("w1", files=[big_upload], pool=fake_pool)
+        assert False, "Expected HTTPException 413"
+    except HTTPException as exc:
+        assert exc.status_code == 413
+        assert "слишком большой" in exc.detail
+
+
+def test_upload_decompression_bomb(fake_pool, monkeypatch):
+    """Upload of a pixel-bomb image returns 400 (decompression bomb)."""
+    from PIL import Image as PILImage
+    import src.api.routes_gallery as gallery_mod
+
+    fake_pool.results = [{"id": "w1", "partition_type": "fixed", "photos": []}]
+
+    original_open = PILImage.open
+
+    def fake_open(fp, *args, **kwargs):
+        raise PILImage.DecompressionBombError("too big")
+
+    monkeypatch.setattr(gallery_mod.Image, "open", fake_open)
+
+    res = client.post(
+        "/api/gallery/works/w1/photos",
+        headers={"X-Telegram-Init-Data": signed_init_data()},
+        files=[("files", ("test.png", PNG_1x1, "image/png"))]
+    )
+    assert res.status_code == 400
+    assert "decompression bomb" in res.json()["detail"]
+
+
+def test_upload_mime_not_in_allowlist(fake_pool):
+    """Content-Type not in ALLOWED_MIME is rejected with 400 before body is read."""
+    fake_pool.results = [{"id": "w1", "partition_type": "fixed", "photos": []}]
+    res = client.post(
+        "/api/gallery/works/w1/photos",
+        headers={"X-Telegram-Init-Data": signed_init_data()},
+        files=[("files", ("shell.sh", b"#!/bin/bash\nrm -rf /", "application/x-sh"))]
+    )
+    assert res.status_code == 400
+    assert "Неподдерживаемый формат" in res.json()["detail"]
 
 def test_get_work(fake_pool):
     fake_pool.results = [

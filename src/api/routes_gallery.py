@@ -15,6 +15,9 @@ from src.config import settings
 from src.db import postgres
 from src.utils.logger import setup_logger
 
+# Pixel-bomb guard: PIL raises DecompressionBombError if image exceeds this many pixels.
+Image.MAX_IMAGE_PIXELS = 50_000_000
+
 logger = setup_logger(__name__)
 
 router = APIRouter(
@@ -44,6 +47,7 @@ class WorkPatch(BaseModel):
     is_published: bool | None = None
 
 FORMAT_EXT = {"JPEG": "jpg", "PNG": "png", "WEBP": "webp"}
+ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp"}
 
 @router.get("/works")
 async def list_works(
@@ -138,29 +142,50 @@ async def upload_photos(
     next_order = max([p["sort_order"] for p in current_photos], default=-1) + 1
     
     for i, file in enumerate(files):
-        data = await file.read()
-        if len(data) > settings.gallery_photo_max_bytes:
-            raise HTTPException(400, "Файл слишком большой")
-            
+        # 2.6.a — early reject by declared Content-Length / UploadFile.size
+        declared_size = getattr(file, "size", None)
+        if declared_size is not None and declared_size > settings.gallery_photo_max_bytes:
+            raise HTTPException(status_code=413, detail="Файл слишком большой")
+
+        # 2.6.b — Content-Type allowlist
+        if file.content_type not in ALLOWED_MIME:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый формат")
+
+        # 2.6.c — streamed read with hard cap
+        buf = bytearray()
+        limit = settings.gallery_photo_max_bytes
+        while True:
+            chunk = await file.read(64 * 1024)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            if len(buf) > limit:
+                raise HTTPException(status_code=413, detail="Файл слишком большой")
+        data = bytes(buf)
+
+        # 2.6.d — single open: pixel-bomb guard + format/size extraction
         try:
-            img = Image.open(io.BytesIO(data))
-            img.verify()
+            with Image.open(io.BytesIO(data)) as img:
+                img_format = img.format
+                width, height = img.size
+                # Trigger full decode — catches corrupt files and pixel bombs
+                img.load()
+        except Image.DecompressionBombError:
+            raise HTTPException(status_code=400, detail="Изображение слишком большое (decompression bomb)")
         except Exception:
-            raise HTTPException(400, "Неподдерживаемый формат")
-            
-        img2 = Image.open(io.BytesIO(data))
-        if img2.format not in FORMAT_EXT:
-            raise HTTPException(400, "Неподдерживаемый формат")
-            
+            raise HTTPException(status_code=400, detail="Неподдерживаемый формат")
+
+        if img_format not in FORMAT_EXT:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый формат")
+
         photo_id = uuid4().hex
-        ext = FORMAT_EXT[img2.format]
+        ext = FORMAT_EXT[img_format]
         rel_path = f"{work_id}/{photo_id}.{ext}"
         abs_path = base_dir / rel_path
-        
+
         abs_path.parent.mkdir(parents=True, exist_ok=True)
         abs_path.write_bytes(data)
-        
-        width, height = img2.size
+
         photo = await postgres.add_gallery_photo(
             pool,
             work_id,
