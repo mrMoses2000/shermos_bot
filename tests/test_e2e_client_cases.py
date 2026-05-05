@@ -528,8 +528,11 @@ async def test_C11_manager_meas_confirm_telegram(
     MANAGER_CHAT_ID = 999011
     MANAGER_UPDATE_ID = 110011
 
-    # Create client row first (measurements have FK → clients)
+    # Create client rows first (FK constraints: measurements and conversation_state → clients)
     await postgres.create_client(pg_pool_integration, CLIENT_CHAT_ID, "Test Client", "test_client")
+    # Manager needs a client row too: _handle_measurement_callback calls upsert_conversation_state
+    # for the manager's chat_id when status is 'rejected'
+    await postgres.create_client(pg_pool_integration, MANAGER_CHAT_ID, "Test Manager", "test_manager")
 
     tz = ZoneInfo(settings.timezone)
     target_dt = datetime.now(tz) + timedelta(days=4)
@@ -595,8 +598,9 @@ async def test_C12_manager_meas_confirm_whatsapp(
 
     monkeypatch.setattr(settings, "manager_whatsapp_numbers", MANAGER_PHONE)
 
-    # Create client row first (measurements have FK → clients)
+    # Create client rows first (FK constraints: measurements and conversation_state → clients)
     await postgres.create_client(pg_pool_integration, CLIENT_CHAT_ID, "Client WA", "client_wa")
+    await postgres.create_client(pg_pool_integration, MANAGER_CHAT_ID, "Manager WA", "manager_wa")
 
     tz = ZoneInfo(settings.timezone)
     target_dt = datetime.now(tz) + timedelta(days=5)
@@ -721,8 +725,10 @@ async def test_C14_manager_meas_reject(
     MANAGER_CHAT_ID = 999014
     MANAGER_UPDATE_ID = 110014
 
-    # Create client row first (measurements have FK → clients)
+    # Create client rows first (FK constraints: measurements and conversation_state → clients)
     await postgres.create_client(pg_pool_integration, CLIENT_CHAT_ID, "Reject Test", "reject_test")
+    # Manager needs a client row: _handle_measurement_callback upserts conversation_state for manager
+    await postgres.create_client(pg_pool_integration, MANAGER_CHAT_ID, "Test Manager", "manager_test")
 
     tz = ZoneInfo(settings.timezone)
     target_dt = datetime.now(tz) + timedelta(days=3)
