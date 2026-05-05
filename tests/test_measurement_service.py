@@ -343,3 +343,24 @@ def test_parse_slot_proposal_relative_keywords_still_work():
     assert measurement_service.parse_slot_proposal("завтра на 11:00", TZ, now=base) == ("2026-04-17", "11:00")
     assert measurement_service.parse_slot_proposal("сегодня в 15:30", TZ, now=base) == ("2026-04-16", "15:30")
     assert measurement_service.parse_slot_proposal("послезавтра 10:00", TZ, now=base) == ("2026-04-18", "10:00")
+
+
+@pytest.mark.asyncio
+async def test_get_due_reminders_uses_correct_window():
+    pool = FakePool(fetch_results=[[]])
+    await measurement_service.get_due_reminders(pool)
+    assert pool.calls
+    sql = pool.calls[0][1]
+    assert "reminder_sent_at IS NULL" in sql
+    assert "status = 'confirmed'" in sql
+    assert "scheduled_time BETWEEN" in sql
+
+
+@pytest.mark.asyncio
+async def test_mark_reminder_sent_updates_correct_row():
+    pool = FakePool()
+    await measurement_service.mark_reminder_sent(pool, 42)
+    assert pool.calls
+    _kind, sql, args = pool.calls[0]
+    assert "reminder_sent_at = now()" in sql
+    assert args == (42,)

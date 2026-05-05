@@ -353,6 +353,31 @@ def parse_slot_proposal(text: str, timezone: str, now: datetime | None = None) -
     return date_value.strftime("%Y-%m-%d"), f"{hour:02d}:{minute:02d}"
 
 
+async def get_due_reminders(pool, *, window_start_min: int = 55, window_end_min: int = 60) -> list[dict[str, Any]]:
+    """Return confirmed measurements scheduled in [now+55min, now+60min] without a reminder yet."""
+    rows = await pool.fetch(
+        """
+        SELECT id, client_chat_id, client_name, client_phone, address, scheduled_time
+        FROM measurements
+        WHERE status = 'confirmed'
+          AND reminder_sent_at IS NULL
+          AND scheduled_time BETWEEN now() + ($1 || ' minutes')::interval
+                                AND now() + ($2 || ' minutes')::interval
+        ORDER BY scheduled_time
+        """,
+        str(window_start_min),
+        str(window_end_min),
+    )
+    return [dict(r) for r in rows]
+
+
+async def mark_reminder_sent(pool, measurement_id: int) -> None:
+    await pool.execute(
+        "UPDATE measurements SET reminder_sent_at = now() WHERE id = $1",
+        measurement_id,
+    )
+
+
 async def get_measurements_for_date(pool, date: str, timezone: str) -> list[dict]:
     """Get all measurements for a specific date (for Mini App calendar view)."""
     tz = ZoneInfo(timezone)

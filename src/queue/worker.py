@@ -752,6 +752,61 @@ async def _measurement_auto_confirm_loop(pg_pool, sender: WhatsAppSender, interv
         await asyncio.sleep(interval_seconds)
 
 
+async def _measurement_reminder_loop(pg_pool, interval_seconds: int = 60) -> None:
+    """Once a minute: queue WhatsApp reminders for confirmed measurements ~1h away."""
+    from src.engine.measurement_service import get_due_reminders, mark_reminder_sent
+
+    while True:
+        try:
+            due = await get_due_reminders(pg_pool)
+            for m in due:
+                try:
+                    m_time = m["scheduled_time"].strftime("%H:%M")
+                    addr = m.get("address") or "—"
+                    client_chat_id = int(m["client_chat_id"])
+                    client_text = (
+                        "Напоминаем: через час, в "
+                        f"<b>{m_time}</b>, к вам приедет мастер на замер.\n"
+                        f"📍 Адрес: {addr}\n\n"
+                        "Если планы изменились — напишите нам."
+                    )
+                    await postgres.insert_outbound_event(
+                        pg_pool,
+                        channel="whatsapp",
+                        chat_id=client_chat_id,
+                        external_chat_id=f"{client_chat_id}@s.whatsapp.net",
+                        reply_text=client_text,
+                        bot_type="client",
+                        idempotency_key=f"reminder:{m['id']}",
+                    )
+                    for manager_phone in settings.manager_whatsapp_numbers_list:
+                        manager_text = (
+                            f"Через час, в <b>{m_time}</b>, замер #{m['id']} —\n"
+                            f"клиент {m.get('client_name', '?')}, {m.get('client_phone', '?')}\n"
+                            f"📍 {addr}"
+                        )
+                        await postgres.insert_outbound_event(
+                            pg_pool,
+                            channel="whatsapp",
+                            chat_id=int(manager_phone),
+                            external_chat_id=f"{manager_phone}@s.whatsapp.net",
+                            reply_text=manager_text,
+                            bot_type="manager",
+                            idempotency_key=f"reminder:{m['id']}:{manager_phone}",
+                        )
+                    await mark_reminder_sent(pg_pool, m["id"])
+                    logger.info("measurement_reminder_sent", extra={"measurement_id": m["id"]})
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.exception("measurement_reminder_item_error", extra={"measurement_id": m.get("id"), "error": str(exc)})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("measurement_reminder_error", extra={"error": str(exc)})
+        await asyncio.sleep(interval_seconds)
+
+
 async def process_manager_job(
     job: Job,
     pg_pool,
@@ -932,6 +987,7 @@ async def run_worker() -> None:
         asyncio.create_task(run_outbox_dispatcher(pg_pool)),
         asyncio.create_task(run_gemini_health_check()),
         asyncio.create_task(_measurement_auto_confirm_loop(pg_pool, whatsapp_sender)),
+        asyncio.create_task(_measurement_reminder_loop(pg_pool)),
         asyncio.create_task(recover_stuck_jobs_periodic_loop(redis_client)),
     ]
     try:

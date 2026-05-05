@@ -1201,3 +1201,84 @@ async def test_C30_concurrent_messages_serialized(
         "SELECT * FROM outbound_events WHERE chat_id=$1", CHAT_ID
     )
     assert len(rows1) >= 1, "Both messages must produce outbound events"
+
+
+@pytest.mark.asyncio
+async def test_C31_reminder_sent_one_hour_before(
+    pg_pool_integration,
+    redis_client_integration,
+    reset_integration_db,
+    monkeypatch,
+):
+    """A confirmed measurement scheduled in ~58 min triggers exactly one client reminder
+    (and one per manager phone). Idempotent: re-running the loop doesn't duplicate."""
+    from datetime import timezone as _tz
+
+    from src.config import settings
+    from src.engine.measurement_service import schedule_measurement
+    from src.queue import worker as worker_mod
+
+    CHAT_ID = 110031
+    MANAGER_PHONE = "77085766841"
+    monkeypatch.setattr(settings, "manager_whatsapp_numbers", MANAGER_PHONE)
+
+    await postgres.create_client(pg_pool_integration, CHAT_ID)
+
+    target = datetime.now(_tz.utc) + timedelta(minutes=58)
+    m = await schedule_measurement(
+        pool=pg_pool_integration,
+        chat_id=CHAT_ID,
+        date=target.strftime("%Y-%m-%d"),
+        time=target.strftime("%H:%M"),
+        client_name="Test",
+        phone="+77001234567",
+        address="Test Addr",
+        timezone="UTC",
+    )
+    await pg_pool_integration.execute(
+        "UPDATE measurements SET status='confirmed' WHERE id=$1", m["id"]
+    )
+
+    task = asyncio.create_task(worker_mod._measurement_reminder_loop(pg_pool_integration, interval_seconds=1))
+    try:
+        deadline = datetime.now() + timedelta(seconds=10)
+        while datetime.now() < deadline:
+            row_count = await pg_pool_integration.fetchval(
+                "SELECT count(*) FROM outbound_events WHERE chat_id=$1 AND bot_type='client'",
+                CHAT_ID,
+            )
+            if row_count >= 1:
+                break
+            await asyncio.sleep(0.3)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    client_rows = await pg_pool_integration.fetch(
+        "SELECT reply_text FROM outbound_events WHERE chat_id=$1 AND bot_type='client'",
+        CHAT_ID,
+    )
+    assert len(client_rows) == 1
+    assert "через час" in client_rows[0]["reply_text"]
+
+    manager_rows = await pg_pool_integration.fetch(
+        "SELECT reply_text FROM outbound_events WHERE bot_type='manager' AND reply_text LIKE '%замер #%'"
+    )
+    assert len(manager_rows) >= 1
+
+    # Idempotency: reminder_sent_at is now set, second loop tick yields nothing new
+    task2 = asyncio.create_task(worker_mod._measurement_reminder_loop(pg_pool_integration, interval_seconds=1))
+    await asyncio.sleep(2)
+    task2.cancel()
+    try:
+        await task2
+    except asyncio.CancelledError:
+        pass
+    final_count = await pg_pool_integration.fetchval(
+        "SELECT count(*) FROM outbound_events WHERE chat_id=$1 AND bot_type='client'",
+        CHAT_ID,
+    )
+    assert final_count == 1, "duplicate reminder must not be queued"
