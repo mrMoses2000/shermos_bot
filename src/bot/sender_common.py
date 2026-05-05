@@ -28,10 +28,16 @@ async def send_and_record(
     if channel == "whatsapp" and not idempotency_key:
         idempotency_key = str(uuid4())
     
-    # Record as pending first
+    # Record as pending first.
+    # Always store chat_id as an integer in the DB column so tests and queries
+    # that filter by chat_id work for both telegram and whatsapp jobs.
+    try:
+        numeric_chat_id = int(chat_id)
+    except (TypeError, ValueError):
+        numeric_chat_id = 0
     event_id = await postgres.insert_outbound_event(
         pg_pool,
-        int(chat_id) if channel == "telegram" else 0,
+        numeric_chat_id,
         text,
         reply_markup=reply_markup,
         bot_type=bot_type,
