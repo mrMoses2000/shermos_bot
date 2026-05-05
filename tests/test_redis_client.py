@@ -55,3 +55,65 @@ async def test_redis_queue_lock_and_cache():
     await client.delete_cached("k")
 
     assert "lock:user:2" in backend.deleted
+
+
+@pytest.mark.asyncio
+async def test_key_prefix_applied_to_enqueue():
+    """RedisClient with key_prefix writes to prefixed key in Redis."""
+    client = RedisClient("redis://localhost", key_prefix="t:")
+    backend = FakeRedisBackend()
+    client.client = backend
+    job = Job(update_id=10, chat_id=20, user_id=30, text="prefixed")
+
+    await client.enqueue_job("queue:foo", job)
+
+    # The lpush must have been called with the prefixed key
+    assert len(backend.items) == 1
+    actual_key, _ = backend.items[0]
+    assert actual_key == "t:queue:foo", f"Expected 't:queue:foo', got '{actual_key}'"
+
+
+@pytest.mark.asyncio
+async def test_no_key_prefix_by_default():
+    """RedisClient without key_prefix writes to the bare key (no regression)."""
+    client = RedisClient("redis://localhost")
+    backend = FakeRedisBackend()
+    client.client = backend
+    job = Job(update_id=11, chat_id=21, user_id=31, text="no-prefix")
+
+    await client.enqueue_job("queue:foo", job)
+
+    assert len(backend.items) == 1
+    actual_key, _ = backend.items[0]
+    assert actual_key == "queue:foo", f"Expected 'queue:foo', got '{actual_key}'"
+
+
+@pytest.mark.asyncio
+async def test_key_prefix_applied_to_lock():
+    """acquire_user_lock and release_user_lock use the prefix."""
+    client = RedisClient("redis://localhost", key_prefix="t:")
+    backend = FakeRedisBackend()
+    client.client = backend
+
+    await client.acquire_user_lock(99)
+    assert "t:lock:user:99" in backend.cache
+
+    await client.release_user_lock(99)
+    assert "t:lock:user:99" in backend.deleted
+
+
+@pytest.mark.asyncio
+async def test_key_prefix_applied_to_cache():
+    """set_cached / get_cached / delete_cached honour the prefix."""
+    client = RedisClient("redis://localhost", key_prefix="t:")
+    backend = FakeRedisBackend()
+    client.client = backend
+
+    await client.set_cached("mykey", "val", 60)
+    assert "t:mykey" in backend.cache
+
+    result = await client.get_cached("mykey")
+    assert result == "val"
+
+    await client.delete_cached("mykey")
+    assert "t:mykey" in backend.deleted

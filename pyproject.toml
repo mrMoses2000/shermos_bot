@@ -13,6 +13,10 @@ dependencies = []
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: requires real Postgres/Redis (run on server: bash scripts/test_integration.sh)",
+]
 
 [tool.coverage.run]
 branch = true
