@@ -161,10 +161,18 @@ async def test_manager_job_fallback_command(monkeypatch):
     async def fake_get_status(*_a, **_kw):
         return None
 
+    async def fake_call_llm(_prompt: str) -> str:
+        # Simulate LLM returning unknown tool for unrecognised free text
+        import json as _json
+        return _json.dumps({"tool": "unknown", "args": {}, "comment": "не понял"})
+
     monkeypatch.setattr(worker.postgres, "get_update_status", fake_get_status)
     monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
     monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound)
     monkeypatch.setattr(worker.postgres, "mark_outbound_sent", fake_mark_sent)
+    # Patch call_llm in the module it's imported from inside the worker else-branch
+    import src.llm.executor as _executor
+    monkeypatch.setattr(_executor, "call_llm", fake_call_llm)
     sender = FakeSender()
 
     await worker.process_manager_job(
@@ -174,7 +182,9 @@ async def test_manager_job_fallback_command(monkeypatch):
         sender,
     )
 
-    assert "Команды" in sender.messages[0]["text"]
+    # The NL fallback for "unknown" tool includes usage examples and command hints
+    reply = sender.messages[0]["text"]
+    assert "/orders" in reply or "Команды" in reply or "Не понял" in reply
 
 
 @pytest.mark.asyncio

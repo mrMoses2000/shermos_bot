@@ -898,13 +898,40 @@ async def process_manager_job(
         elif await _handle_manager_slot_proposal(text, job, pg_pool, sender):
             pass
         else:
+            # Free text — route through Gemini for NL command parsing
+            from src.llm.manager_prompt_builder import build_manager_prompt
+            from src.llm.manager_tools import dispatch
+            from src.llm.executor import call_llm
+            import json as _json
+            try:
+                raw = await call_llm(build_manager_prompt(text))
+                # Strip ```json fences if present
+                cleaned = raw.strip()
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+                    cleaned = cleaned.rsplit("```", 1)[0].strip()
+                parsed = _json.loads(cleaned)
+                tool = parsed.get("tool")
+                args = parsed.get("args") or {}
+                comment = parsed.get("comment", "")
+                if tool == "unknown" or not tool:
+                    reply = (
+                        "Не понял команду. Попробуй так:\n"
+                        "• «покажи последние заказы»\n"
+                        "• «замеры на завтра»\n"
+                        "• «детали заказа 2fdb6a4b»\n"
+                        "• «отмени замер 5»\n"
+                        "Или используй /orders, /measurements, /health."
+                    )
+                else:
+                    reply = await dispatch(pg_pool, tool, args)
+                    if reply is None:
+                        reply = f"Неизвестная команда: {tool}"
+            except Exception as exc:
+                logger.warning("manager_nl_routing_failed", extra={"error": str(exc), "text": text[:80]})
+                reply = "Команды: /orders, /measurements, /health\nИли спроси на русском, например: «последние заказы»."
             await send_and_record(
-                pg_pool,
-                sender,
-                "",
-                job.chat_id,
-                "Команды: /orders, /health",
-                bot_type="manager",
+                pg_pool, sender, "", job.chat_id, reply, bot_type="manager",
             )
         await postgres.mark_update_status(pg_pool, job.update_id, "completed")
     except Exception as exc:
