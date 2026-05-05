@@ -76,8 +76,13 @@ def validate_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86
     if not hmac.compare_digest(expected_hash, received_hash):
         raise ValueError("Invalid initData hash")
 
-    auth_date = int(data.get("auth_date", "0") or "0")
-    if auth_date and time.time() - auth_date > max_age_seconds:
+    try:
+        auth_date = int(data.get("auth_date", "0") or "0")
+    except (TypeError, ValueError):
+        auth_date = 0
+    if auth_date <= 0:
+        raise ValueError("Missing or invalid auth_date")
+    if time.time() - auth_date > max_age_seconds:
         raise ValueError("initData expired")
 
     if "user" in data:
