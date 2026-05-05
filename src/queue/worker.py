@@ -582,7 +582,8 @@ async def _handle_measurement_callback(
             )
             return
 
-    m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+    from src.utils.datetime_format import fmt_local
+    m_time = fmt_local(measurement["scheduled_time"], "%d.%m.%Y %H:%M")
     status_text = {
         "confirmed": "подтверждён",
         "rejected": "отклонён",
@@ -682,8 +683,9 @@ async def _handle_manager_slot_proposal(
 
 
 async def _notify_auto_confirmed_measurements(pg_pool, sender: WhatsAppSender, measurements: list[dict]) -> None:
+    from src.utils.datetime_format import fmt_local
     for measurement in measurements:
-        m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+        m_time = fmt_local(measurement["scheduled_time"], "%d.%m.%Y %H:%M")
         
         client_chat_id = measurement["client_chat_id"]
         last_event = await postgres.get_last_inbound_event(pg_pool, client_chat_id)
@@ -780,9 +782,10 @@ async def _measurement_reminder_loop(pg_pool, interval_seconds: int = 60) -> Non
     while True:
         try:
             due = await get_due_reminders(pg_pool)
+            from src.utils.datetime_format import fmt_local
             for m in due:
                 try:
-                    m_time = m["scheduled_time"].strftime("%H:%M")
+                    m_time = fmt_local(m["scheduled_time"], "%H:%M")
                     addr = m.get("address") or "—"
                     client_chat_id = int(m["client_chat_id"])
                     client_text = (
@@ -907,9 +910,10 @@ async def process_manager_job(
             await send_and_record(pg_pool, sender, "", job.chat_id, reply, bot_type="manager")
         elif text.startswith("/measurements"):
             measurements = await postgres.list_measurements(pg_pool, upcoming_only=True, limit=10)
+            from src.utils.datetime_format import fmt_local
             lines = ["<b>Ближайшие замеры:</b>"]
             for m in measurements:
-                t = m["scheduled_time"].strftime("%d.%m %H:%M")
+                t = fmt_local(m["scheduled_time"], "%d.%m %H:%M")
                 lines.append(f"• #{m['id']} {t} — {m.get('client_name', '—')} ({m['status']})")
             await send_and_record(
                 pg_pool, sender, "", job.chat_id,

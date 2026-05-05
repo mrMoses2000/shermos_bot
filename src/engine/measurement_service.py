@@ -370,7 +370,12 @@ async def update_measurement_status(
 
 
 async def auto_confirm_due_measurements(pool) -> list[dict[str, Any]]:
-    """Auto-confirm measurements that stayed scheduled past the manager decision deadline."""
+    """Auto-confirm measurements that stayed scheduled past the manager decision deadline.
+
+    Skip rows that have a pending_reschedule_at — those are mid-negotiation
+    between master and client, and auto-confirm would race-confirm the OLD
+    time while the client is still considering the new one.
+    """
     rows = await pool.fetch(
         """
         UPDATE measurements
@@ -378,6 +383,7 @@ async def auto_confirm_due_measurements(pool) -> list[dict[str, Any]]:
             reason=COALESCE(NULLIF(reason, ''), 'Автоподтверждение: менеджер не ответил за 15 минут'),
             updated_at=now()
         WHERE status='scheduled'
+          AND pending_reschedule_at IS NULL
           AND COALESCE(auto_confirm_at, created_at + interval '15 minutes') <= now()
         RETURNING *
         """
@@ -401,7 +407,8 @@ async def upsert_measurement_slot(
     slot_start = validate_time(date, time, timezone)
     conflict = await check_conflict(pool, slot_start, duration_minutes)
     if conflict:
-        conflict_time = conflict["scheduled_time"].strftime("%H:%M")
+        tz = ZoneInfo(timezone)
+        conflict_time = conflict["scheduled_time"].astimezone(tz).strftime("%H:%M")
         raise ValueError(f"На {conflict_time} уже есть активный замер рядом с этим временем")
     row = await pool.fetchrow(
         """

@@ -43,9 +43,10 @@ async def list_upcoming_measurements(pg_pool, args: dict[str, Any]) -> str:
     rows = await postgres.list_measurements(pg_pool, upcoming_only=True, limit=limit)
     if not rows:
         return "Ближайших замеров нет."
+    from src.utils.datetime_format import fmt_local
     lines = ["<b>Ближайшие замеры:</b>", ""]
     for m in rows:
-        when = m["scheduled_time"].strftime("%d.%m %H:%M")
+        when = fmt_local(m["scheduled_time"])
         name = m.get("client_name") or "—"
         phone = m.get("client_phone") or "—"
         lines.append(f"📅 <b>{when}</b> · #{m['id']}")
@@ -95,7 +96,8 @@ async def cancel_measurement(pg_pool, args: dict[str, Any]) -> str:
         m = await update_measurement_status(pg_pool, mid, "cancelled", reason="Отменён мастером")
     except ValueError as exc:
         return f"Не удалось отменить замер #{mid}: {exc}"
-    when = m["scheduled_time"].strftime("%d.%m %H:%M")
+    from src.utils.datetime_format import fmt_local
+    when = fmt_local(m["scheduled_time"])
     return f"❌ Замер #{mid} ({when}) отменён."
 
 
@@ -143,8 +145,10 @@ async def propose_reschedule(pg_pool, args: dict[str, Any]) -> str:
 
     # Notify the client via outbox
     proposed = m["pending_reschedule_at"]
-    proposed_str = proposed.strftime("%d.%m %H:%M")
-    old_str = m["scheduled_time"].strftime("%d.%m %H:%M")
+    # asyncpg returns TIMESTAMPTZ in UTC; format in the local zone for users.
+    from src.utils.datetime_format import fmt_local
+    proposed_str = fmt_local(proposed)
+    old_str = fmt_local(m["scheduled_time"])
     client_chat_id = int(m["client_chat_id"])
 
     reason_block = f"\n\nПричина: {reason}" if reason else ""

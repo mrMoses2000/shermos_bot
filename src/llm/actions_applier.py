@@ -309,7 +309,8 @@ async def apply_actions(
 
         # Notify ALL managers about new measurement
         m_id = measurement["id"]
-        m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+        from src.utils.datetime_format import fmt_local
+        m_time = fmt_local(measurement["scheduled_time"], "%d.%m.%Y %H:%M")
         order_request_id = measurement.get("order_request_id")
         order_line = f"Заказ: <code>{order_request_id}</code>\n" if order_request_id else ""
         _new_measurement_text = (
@@ -384,7 +385,8 @@ async def apply_actions(
             system_collected_patch["measurement_address"] = params.address
 
         # Notify managers about the change (best-effort via outbox).
-        m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+        from src.utils.datetime_format import fmt_local
+        m_time = fmt_local(measurement["scheduled_time"], "%d.%m.%Y %H:%M")
         changed_lines = []
         if params.date or params.time:
             changed_lines.append(f"⏰ Новое время: <b>{m_time}</b>")

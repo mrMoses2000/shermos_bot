@@ -15,9 +15,11 @@ def _format_measurements_block(measurements: list[dict[str, Any]] | None) -> str
         return ""
     if not measurements:
         return "═══ АКТИВНЫЕ ЗАМЕРЫ ═══\n\n(нет активных замеров)\n\n"
+    from src.utils.datetime_format import fmt_local
     lines = ["═══ АКТИВНЫЕ ЗАМЕРЫ ═══", ""]
     for m in measurements:
-        when = m["scheduled_time"].strftime("%d.%m %H:%M") if hasattr(m["scheduled_time"], "strftime") else str(m["scheduled_time"])
+        st = m["scheduled_time"]
+        when = fmt_local(st) if hasattr(st, "strftime") else str(st)
         name = m.get("client_name") or "—"
         phone = m.get("client_phone") or "—"
         lines.append(f"- #{m['id']}: {when}, клиент {name}, тел. {phone}, статус {m.get('status', '?')}")
