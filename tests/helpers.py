@@ -96,3 +96,63 @@ class FakeRedis:
 
     async def release_user_lock(self, chat_id):
         self.released.append(chat_id)
+
+
+class FakeWhatsAppSender:
+    """Records send_message / _post_json calls for WhatsApp; returns fake message IDs."""
+
+    channel = "whatsapp"
+
+    def __init__(self, role="client"):
+        self.role = role
+        self.messages = []
+        self._post_calls = []
+        self._msg_counter = 0
+        self._raise = None  # set to an exception to simulate failures
+
+    async def start(self):
+        pass
+
+    async def close(self):
+        pass
+
+    async def _post_json(self, path, payload):
+        self._post_calls.append((path, payload))
+        if self._raise:
+            raise self._raise
+        self._msg_counter += 1
+        return {"message_id": f"fake-msg-{self._msg_counter}"}
+
+    async def send_message(
+        self,
+        token,
+        chat_id,
+        text,
+        parse_mode="HTML",
+        reply_markup=None,
+        idempotency_key=None,
+        **kwargs,
+    ):
+        self._msg_counter += 1
+        msg_id = f"fake-wa-{self._msg_counter}"
+        self.messages.append(
+            {
+                "token": token,
+                "chat_id": chat_id,
+                "text": text,
+                "reply_markup": reply_markup,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if self._raise:
+            raise self._raise
+        return msg_id
+
+    async def send_chat_action(self, token, chat_id, action="typing"):
+        return {"ok": True}
+
+    async def send_photo(self, token, chat_id, photo_path, caption=""):
+        return {"ok": True}
+
+    async def send_media_group(self, token, chat_id, photo_paths, caption=""):
+        return {"ok": True}
