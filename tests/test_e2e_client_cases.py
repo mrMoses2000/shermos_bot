@@ -1230,7 +1230,7 @@ async def test_C31_reminder_sent_one_hour_before(
     target = datetime.now(_tz.utc) + timedelta(minutes=58)
     m_id = await pg_pool_integration.fetchval(
         """
-        INSERT INTO measurements (chat_id, scheduled_time, duration_minutes, status,
+        INSERT INTO measurements (client_chat_id, scheduled_time, duration_minutes, status,
                                    client_name, client_phone, address)
         VALUES ($1, $2, 60, 'confirmed', 'Test', '+77001234567', 'Test Addr')
         RETURNING id
