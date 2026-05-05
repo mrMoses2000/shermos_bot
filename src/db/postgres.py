@@ -1104,6 +1104,10 @@ async def list_photos_for_work(pool, work_id: str) -> list[dict[str, Any]]:
     )
     return [dict(row) for row in rows]
 
+async def get_gallery_photo(pool, photo_id: str) -> dict[str, Any] | None:
+    row = await pool.fetchrow("SELECT * FROM gallery_photos WHERE id=$1", photo_id)
+    return dict(row) if row else None
+
 async def delete_gallery_photo(pool, photo_id: str) -> dict[str, Any] | None:
     row = await pool.fetchrow("DELETE FROM gallery_photos WHERE id=$1 RETURNING *", photo_id)
     return dict(row) if row else None

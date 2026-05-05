@@ -102,26 +102,38 @@ async def update_work(work_id: str, data: WorkPatch, pool=Depends(get_pool)):
 
 @router.delete("/works/{work_id}")
 async def delete_work(work_id: str, pool=Depends(get_pool)):
-    try:
-        photos = await postgres.delete_gallery_work(pool, work_id)
-    except ValueError:
+    # Fetch work + photos in one round-trip to check existence and collect file paths
+    work = await postgres.get_gallery_work(pool, work_id)
+    if not work:
         raise HTTPException(status_code=404, detail="Work not found")
-        
-    # Unlink files
+
+    photos = work.get("photos", [])
+
+    # Unlink ALL files before touching DB — if any fail, abort without deleting rows
     base_dir = Path(settings.gallery_dir)
     for photo in photos:
-        file_path = base_dir / photo["file_path"]
+        abs_path = base_dir / photo["file_path"]
         try:
-            file_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-            
-    # Try removing empty directory
+            abs_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.error(
+                "gallery_work_photo_unlink_failed",
+                extra={"work_id": work_id, "file_path": photo["file_path"], "error": str(exc)},
+            )
+            raise HTTPException(status_code=500, detail="Не удалось удалить файл")
+
+    # All files unlinked — now delete from DB (CASCADE removes gallery_photos rows)
+    try:
+        await postgres.delete_gallery_work(pool, work_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Work not found")
+
+    # Try removing empty directory (best-effort)
     try:
         (base_dir / work_id).rmdir()
     except OSError:
         pass
-        
+
     return {"deleted_photos": len(photos)}
 
 @router.post("/works/{work_id}/photos")
@@ -202,14 +214,24 @@ async def upload_photos(
 
 @router.delete("/photos/{photo_id}")
 async def delete_photo(photo_id: str, pool=Depends(get_pool)):
-    photo = await postgres.delete_gallery_photo(pool, photo_id)
+    # Fetch before touching DB — need file path to unlink first
+    photo = await postgres.get_gallery_photo(pool, photo_id)
     if not photo:
         raise HTTPException(status_code=404, detail="Photo not found")
-        
+
     abs_path = Path(settings.gallery_dir) / photo["file_path"]
     try:
         abs_path.unlink(missing_ok=True)
-    except OSError:
-        pass
-        
+    except OSError as exc:
+        logger.error(
+            "gallery_photo_unlink_failed",
+            extra={"photo_id": photo_id, "error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail="Не удалось удалить файл")
+
+    # File unlinked successfully — now delete the DB row
+    deleted = await postgres.delete_gallery_photo(pool, photo_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
     return {"ok": True}

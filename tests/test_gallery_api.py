@@ -193,10 +193,13 @@ def test_delete_work(fake_pool, tmp_path, monkeypatch):
     (tmp_path / "w1").mkdir(parents=True)
     f = tmp_path / "w1/test.png"
     f.write_bytes(PNG_1x1)
-    
+
+    # Call sequence: get_gallery_work (fetchrow + fetch), delete_gallery_work (fetch + fetchrow)
     fake_pool.results = [
-        [{"file_path": "w1/test.png"}],
-        {"id": "w1"}
+        {"id": "w1", "partition_type": "fixed"},   # get_gallery_work fetchrow
+        [{"file_path": "w1/test.png"}],            # get_gallery_work fetch (photos)
+        [{"file_path": "w1/test.png"}],            # delete_gallery_work list_photos_for_work fetch
+        {"id": "w1"},                              # delete_gallery_work DELETE fetchrow
     ]
     res = client.delete(
         "/api/gallery/works/w1",
@@ -206,24 +209,94 @@ def test_delete_work(fake_pool, tmp_path, monkeypatch):
     assert not f.exists()
     assert not (tmp_path / "w1").exists()
 
+
+def test_delete_work_file_unlink_fails_returns_500(fake_pool, tmp_path, monkeypatch):
+    """If any file unlink fails during delete_work, return 500 and do NOT delete from DB."""
+    from src.config import settings
+    from pathlib import Path
+    monkeypatch.setattr(settings, "gallery_dir", str(tmp_path))
+    (tmp_path / "w1").mkdir(parents=True)
+
+    # Two photos; we'll make the first unlink raise OSError
+    fake_pool.results = [
+        {"id": "w1", "partition_type": "fixed"},          # get_gallery_work fetchrow
+        [                                                   # get_gallery_work fetch (photos)
+            {"file_path": "w1/a.png"},
+            {"file_path": "w1/b.png"},
+        ],
+        # delete_gallery_work should NOT be called — no further results needed
+    ]
+
+    original_unlink = Path.unlink
+
+    def failing_unlink(self, missing_ok=False):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    res = client.delete(
+        "/api/gallery/works/w1",
+        headers={"X-Telegram-Init-Data": signed_init_data()}
+    )
+    assert res.status_code == 500
+    # No DELETE call should have been made to the DB
+    delete_calls = [c for c in fake_pool.calls if "DELETE FROM gallery_works" in c[1]]
+    assert len(delete_calls) == 0
+
+
 def test_delete_photo(fake_pool, tmp_path, monkeypatch):
     from src.config import settings
     monkeypatch.setattr(settings, "gallery_dir", str(tmp_path))
     (tmp_path / "w1").mkdir(parents=True)
     f = tmp_path / "w1/test.png"
     f.write_bytes(PNG_1x1)
-    
-    fake_pool.results = [{"file_path": "w1/test.png"}]
+
+    # Call sequence: get_gallery_photo (fetchrow) then delete_gallery_photo (fetchrow)
+    fake_pool.results = [
+        {"id": "p1", "file_path": "w1/test.png"},  # get_gallery_photo
+        {"id": "p1", "file_path": "w1/test.png"},  # delete_gallery_photo
+    ]
     res = client.delete(
         "/api/gallery/photos/p1",
         headers={"X-Telegram-Init-Data": signed_init_data()}
     )
     assert res.status_code == 200
     assert not f.exists()
-    
+
+    # Missing photo → 404
     fake_pool.results = [None]
     res = client.delete(
         "/api/gallery/photos/missing",
         headers={"X-Telegram-Init-Data": signed_init_data()}
     )
     assert res.status_code == 404
+
+
+def test_delete_photo_file_unlink_fails_returns_500(fake_pool, tmp_path, monkeypatch):
+    """If file unlink fails, return 500 and do NOT call delete_gallery_photo."""
+    from src.config import settings
+    from pathlib import Path
+    monkeypatch.setattr(settings, "gallery_dir", str(tmp_path))
+    (tmp_path / "w1").mkdir(parents=True)
+    (tmp_path / "w1" / "test.png").write_bytes(PNG_1x1)
+
+    fake_pool.results = [
+        {"id": "p1", "file_path": "w1/test.png"},  # get_gallery_photo
+        # delete_gallery_photo should NOT be called
+    ]
+
+    original_unlink = Path.unlink
+
+    def failing_unlink(self, missing_ok=False):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    res = client.delete(
+        "/api/gallery/photos/p1",
+        headers={"X-Telegram-Init-Data": signed_init_data()}
+    )
+    assert res.status_code == 500
+    # Confirm delete_gallery_photo was not called (no DELETE query in pool calls)
+    delete_calls = [c for c in fake_pool.calls if "DELETE FROM gallery_photos" in c[1]]
+    assert len(delete_calls) == 0
