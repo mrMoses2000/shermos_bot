@@ -1,8 +1,7 @@
-import type { Page } from "../App";
 import type { ReactNode } from "react";
 import DotMatrixBackground from "./DotMatrixBackground";
 
-const nav: Array<{ id: Page; label: string }> = [
+const nav: Array<{ id: string; label: string }> = [
   { id: "dashboard",    label: "Дашборд" },
   { id: "orders",       label: "Заказы" },
   { id: "clients",      label: "Клиенты" },
@@ -14,8 +13,8 @@ const nav: Array<{ id: Page; label: string }> = [
 ];
 
 type Props = {
-  page: Page;
-  onPageChange: (page: Page) => void;
+  page: string;
+  onPageChange: (page: string) => void;
   onLogout?: () => void;
   showLogout?: boolean;
   children: ReactNode;

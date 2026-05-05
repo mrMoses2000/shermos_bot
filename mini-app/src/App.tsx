@@ -114,7 +114,7 @@ export default function App() {
   return (
     <Layout
       page={page}
-      onPageChange={setPage}
+      onPageChange={(p) => setPage(p as Page)}
       onLogout={handleLogout}
       showLogout={!isTelegram && adminToken.length > 0}
     >
