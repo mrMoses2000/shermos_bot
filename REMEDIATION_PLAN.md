@@ -943,6 +943,389 @@ if bot_type == "manager" and not _is_allowed_manager_phone(phone_e164):
 
 ---
 
+## Phase 6 — Раздельный деплой: Frontend на Netlify, Backend на Ubuntu
+
+**Зачем:** сейчас фронтенд (Mini App + CMS) отдаётся через uvicorn (`run_api.py` mount StaticFiles) → cloudflared trycloudflare URL. Это:
+1. Завязывает поведение фронтенда на состояние backend-сервиса.
+2. trycloudflare URL временный — каждый рестарт `shermos-tunnel` даёт новый адрес. Нет стабильной ссылки для Telegram BotFather и для клиентов.
+3. CDN-преимущества (кеш, географическое распределение) не используются.
+4. `.netlify/state.json` показывает что Netlify-проект `shermos-architecture-viz-32711` **уже создан** (siteId `752f6fe1-1f6c-4df5-bcc9-4e5b939293e8`) — но не настроен под Mini App.
+
+Цель: фронтенд деплоится на Netlify (стабильный URL, CDN, auto-deploy на git push), backend остаётся на Ubuntu и обслуживает только API. Между ними — кросс-доменные запросы через явный `VITE_API_BASE_URL`.
+
+### 6.0 Audit текущего состояния Netlify-проекта (один шаг, ручной)
+
+**Где:** macbook.
+
+**agent prompt:**
+> 1. `netlify status` — увидеть текущий проект (`shermos-architecture-viz-32711`).
+> 2. `netlify api listSiteDeploys --data '{"site_id":"752f6fe1-1f6c-4df5-bcc9-4e5b939293e8"}' | head -50` — посмотреть последний деплой, что там лежит.
+> 3. Принять решение: переиспользовать (rename + новый publish dir) ИЛИ создать новый site с понятным именем `shermos-cms` или `shermos-app`.
+> 4. Если новый: `netlify sites:create --name shermos-app` (или интерактивно через `netlify init`). Запомнить новый siteId, обновить `.netlify/state.json` (он в .gitignore — это локальный файл).
+
+**Verify:** `netlify status` показывает выбранный/созданный сайт.
+
+### 6.1 Frontend: API client → абсолютный URL через `VITE_API_BASE_URL`
+
+**Файлы:** `mini-app/src/api/client.ts`, `mini-app/.env.example` (новый), `mini-app/.env.production` (новый, в .gitignore).
+
+**agent prompt:**
+> 1. В `mini-app/src/api/client.ts` найти базовый URL формирующий запросы (вероятно `''` или относительные пути типа `/api/...`).
+> 2. Ввести `const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''`. Все запросы идут с `${API_BASE}/api/...`.
+> 3. Пустая строка = same-origin поведение (для локального dev и текущего uvicorn-варианта). Проставленный URL = абсолютный (для Netlify production).
+> 4. Создать `mini-app/.env.example` с шаблоном:
+>    ```
+>    VITE_API_BASE_URL=https://carb-investigation-drive-equations.trycloudflare.com
+>    ```
+> 5. `mini-app/.env.production` (в gitignore!) — реальное значение, используется при `npm run build` локально для тестов. Netlify build использует env-переменные из своего UI, не из git.
+> 6. Тесты: добавить unit-тест в `mini-app/src/__tests__/api-base-url.test.ts` если фреймворк есть; иначе просто smoke в `tsc --noEmit` и `npm run build`.
+
+**Verify (локально):**
+- `cd mini-app && VITE_API_BASE_URL=https://example.com npm run build` → в `dist/assets/*.js` встречается `https://example.com`.
+- `cd mini-app && npm run build` (без env) → в bundle нет жёстко зашитого URL.
+- Backend локально: запускать без статики (см. 6.7) и видеть, что фронт всё ещё стучится в API через absolute URL.
+
+### 6.2 Корневой `netlify.toml` (под git)
+
+**Файл:** `netlify.toml` в корне репо (новый).
+
+```toml
+[build]
+  base = "mini-app"
+  command = "npm run build"
+  publish = "mini-app/dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# SPA: catch-all для Mini App
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# CMS — отдельный entry point
+[[redirects]]
+  from = "/cms"
+  to = "/cms.html"
+  status = 200
+
+[[redirects]]
+  from = "/cms/*"
+  to = "/cms.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Telegram Mini App требует загрузку в iframe — НЕ ставить X-Frame-Options
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # CSP включаем когда CMS будет реально проверена в браузере; пока пусто.
+```
+
+**agent prompt:**
+> 1. Создать `netlify.toml` с содержимым выше.
+> 2. Удалить из репо `.netlify/` если случайно попала (она в .gitignore — должна не попасть, но проверить).
+> 3. Тестовый build локально: `cd mini-app && npm run build`, потом из корня `netlify build --offline` (если CLI поддерживает) — должен прогнать тот же скрипт.
+
+**Verify:** `npm run build` зелёный, `dist/index.html` + `dist/cms.html` существуют.
+
+### 6.3 Деплой на Netlify (CI через git + ручной первичный)
+
+**agent prompt:**
+> 1. Из корня репо: `netlify deploy --prod --dir=mini-app/dist` (или сначала `--dir=mini-app/dist` без `--prod` для preview).
+> 2. URL результата зафиксировать.
+> 3. Настроить **continuous deployment** через Netlify UI или `netlify init`: connect GitHub репо `mrMoses2000/shermos_bot`, branch `main`, build settings из `netlify.toml`. После этого каждый push в main = авто-деплой фронта.
+> 4. В Netlify UI выставить env-переменную `VITE_API_BASE_URL` со значением **публичного API URL backend'а** (см. 6.4 ниже — для начала это текущий trycloudflare URL).
+
+**Verify:**
+- `curl https://<netlify-url>/index.html` → 200, HTML.
+- `curl https://<netlify-url>/cms.html` → 200, CMS-разметка.
+- Открыть в браузере, в DevTools → Network → запрос на API уходит на `VITE_API_BASE_URL`.
+
+### 6.4 Backend: стабильный публичный API URL (две опции)
+
+**Зачем:** Netlify-фронту нужен фиксированный API endpoint. Сейчас `https://carb-investigation-drive-equations.trycloudflare.com` живёт случайно (последний рестарт cloudflared был 14 апреля). Любой `systemctl restart shermos-tunnel` даст новый URL — Netlify-фронт сломается.
+
+**Опция A: named Cloudflare tunnel (рекомендую)**
+1. На сервере: `cloudflared login` → авторизация в Cloudflare-аккаунте через браузер.
+2. `cloudflared tunnel create shermos-api` → получаем UUID туннеля и credentials json.
+3. Создать `/etc/cloudflared/config.yml`:
+   ```yaml
+   tunnel: <UUID>
+   credentials-file: /etc/cloudflared/<UUID>.json
+   ingress:
+     - hostname: api.shermos.example.com  # требуется свой домен в CF
+       service: http://localhost:9443
+     - service: http_status:404
+   ```
+4. `cloudflared tunnel route dns shermos-api api.shermos.example.com` → в Cloudflare DNS прописывается CNAME.
+5. Обновить systemd unit `shermos-tunnel.service` — `ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml tunnel run shermos-api`.
+6. `systemctl restart shermos-tunnel` → стабильный URL `https://api.shermos.example.com`.
+
+**Требует:** свой домен в Cloudflare. Если нет — пропустить опцию A.
+
+**Опция B: оставить trycloudflare как временный**
+- Просто **не рестартить shermos-tunnel** без необходимости.
+- В Netlify env прописать текущий trycloudflare URL.
+- Документировать в `docs/DEPLOY_NETLIFY.md`: «при перезапуске cloudflared взять новый URL из `journalctl -u shermos-tunnel | grep trycloudflare` и обновить `VITE_API_BASE_URL` в Netlify UI». Это операционный долг.
+
+**agent prompt (для опции A):**
+> Подготовить `cloudflared/config.yml.template` в репе (`scripts/cloudflared/config.yml.template`) с placeholder для UUID и hostname. Документировать в `docs/STABLE_API_URL.md` шаги 1-6 выше. Не требовать выполнения — пользователь сделает когда у него будет домен.
+
+**agent prompt (для опции B — то что делаем сейчас):**
+> Документировать в `docs/STABLE_API_URL.md`:
+> - текущий статус: trycloudflare без своего домена.
+> - команда для получения текущего URL: `ssh aws-shermos1-frankfurt 'journalctl -u shermos-tunnel | grep trycloudflare | tail -1'`.
+> - инструкция как обновить `VITE_API_BASE_URL` в Netlify UI после ротации URL.
+> - upgrade path до опции A.
+
+**Verify:** `docs/STABLE_API_URL.md` есть.
+
+### 6.5 CORS на сервере → Netlify URL
+
+**agent prompt:**
+> 1. На сервере (через ssh, ручная правка `.env` — это секрет, не git): обновить `CORS_ALLOWED_ORIGINS` на конкретный Netlify URL (например `https://shermos-app.netlify.app`).
+> 2. `systemctl restart shermos-api`.
+> 3. Проверка из ноута: `curl -H "Origin: https://shermos-app.netlify.app" -i https://<api-url>/api/health/bridges` → ACAO заголовок присутствует.
+
+**Verify:** preflight OPTIONS-запрос на `/api/orders` с Origin от Netlify возвращает корректные ACAO + ACAM + ACAH.
+
+### 6.6 Telegram Mini App URL update
+
+**agent prompt:**
+> 1. В Telegram BotFather: `/mybots` → выбрать клиентский бот → Bot Settings → Menu Button (или /newapp если нет) → URL: `https://<netlify-url>/`.
+> 2. То же для менеджерского бота, если у него есть Mini App: URL `https://<netlify-url>/cms`.
+> 3. Тестовый прогон: открыть Mini App из Telegram, увидеть Mini App страницу.
+
+**Verify:** Mini App открывается в Telegram WebView, делает запросы на API, получает ответы.
+
+### 6.7 Backend больше не отдаёт фронтенд (опционально, но чище)
+
+**Файл:** `run_api.py`.
+
+**agent prompt:**
+> 1. Завернуть `app.mount("/", StaticFiles(directory="mini-app/dist", html=True), name="spa")` в условие `if os.getenv("SERVE_FRONTEND_LOCAL") == "1"`.
+> 2. На сервере НЕ выставлять `SERVE_FRONTEND_LOCAL=1` → фронт идёт ТОЛЬКО на Netlify.
+> 3. Локально для dev можно выставить и продолжать работать как раньше.
+> 4. Тестовый прогон локально: `SERVE_FRONTEND_LOCAL=1 python run_api.py` → отдаёт SPA. Без флага → 404 на `/`.
+
+**Verify:** на сервере `curl https://<api-url>/` → 404 (или подобный ответ от FastAPI), `curl https://<api-url>/api/health/bridges` → 401. Frontend полностью на Netlify.
+
+### 6.8 `MINI_APP_URL` в env → Netlify URL
+
+**agent prompt:**
+> На сервере в `.env`: `MINI_APP_URL=https://<netlify-url>/`. Рестарт worker'а (он использует MINI_APP_URL для построения inline-кнопок «Открыть Mini App»).
+
+**Verify:** клиент в Telegram, нажимая кнопку «Открыть Mini App» → попадает на Netlify-фронт.
+
+### 6.9 Документация
+
+**agent prompt:**
+> Создать/обновить:
+> - `docs/DEPLOY_NETLIFY.md` — как настроить Netlify, какие env, как менять API URL без передеплоя backend.
+> - `DEPLOY.md` — раздел «Раздельный деплой: фронтенд + backend».
+
+**Gate Phase 6:**
+- Frontend на стабильном Netlify URL.
+- Backend отдаёт только API (4xx на `/`).
+- Mini App открывается в Telegram через Netlify URL.
+- CMS открывается в браузере по `/cms`.
+- CORS-префлайт работает с Netlify origin.
+- Хотя бы один e2e: пройти OTP-логин в CMS из обычного браузера до получения `access_token`.
+
+---
+
+## Phase 7 — Watchdog production wiring (доделать Phase 5.3)
+
+**Зачем:** в Phase 5.3 я приготовил Python-сторону watchdog (`src/utils/watchdog.py`, notify-функции, интеграция в `run_worker.py`/`run_webhook.py`), но не положил **systemd unit-файлы** в репу и не активировал `Type=notify, WatchdogSec=60` в проде. Без этого watchdog никакого эффекта не даёт.
+
+### 7.1 Все 5 unit-файлов в репу
+
+**Файлы:** `scripts/systemd/shermos-{worker,webhook,api,wa-client,wa-manager,tunnel}.service`. Сейчас в репе только два WhatsApp-юнита.
+
+**agent prompt:**
+> 1. Через ssh снять текущие unit-файлы с сервера: `for s in worker webhook api tunnel; do ssh aws-shermos1-frankfurt "systemctl cat shermos-$s.service" > /tmp/$s; done`.
+> 2. Очистить от инструкций systemd-комментариев (строки `#` с путём).
+> 3. Положить в `scripts/systemd/`. Привести имена в соответствие с уже лежащими (`shermos-worker.service` и т.п.).
+> 4. В worker и webhook добавить `Type=notify`, `NotifyAccess=main`, `WatchdogSec=60`, `Restart=on-failure` (если ещё нет).
+> 5. API оставить без watchdog (uvicorn не интегрирован с sd_notify; только Restart=on-failure).
+> 6. Tunnel — без watchdog, но `Restart=on-failure`.
+> 7. WhatsApp-бриджи — Node.js, sd_notify работает только с системным libsystemd; пока без watchdog (TODO в комментарии).
+
+**Verify (локально):** `systemd-analyze verify scripts/systemd/*.service` (если есть на macOS — нет; пропустить).
+
+### 7.2 Скрипт деплоя unit-файлов
+
+**Файл:** `scripts/install_systemd.sh`.
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")/systemd" && pwd)"
+for f in "$DIR"/*.service; do
+  name="$(basename "$f")"
+  echo "Installing $name..."
+  sudo cp "$f" "/etc/systemd/system/$name"
+done
+sudo systemctl daemon-reload
+echo "Done. Restart with: sudo systemctl restart shermos-{worker,webhook,api,wa-client,wa-manager}"
+```
+
+Сделать chmod +x, документировать в DEPLOY.md.
+
+### 7.3 systemd-python на сервере
+
+**agent prompt:**
+> 1. На сервере: `apt install -y libsystemd-dev` (или эквивалент Ubuntu 24.04 — `libsystemd-dev`).
+> 2. `cd ~/shermos_bot && .venv/bin/pip install systemd-python>=235`.
+> 3. Smoke: `.venv/bin/python -c "import systemd.daemon; print(systemd.daemon.notify('READY=1'))"` — без ошибки.
+
+### 7.4 Тестовый прогон watchdog
+
+**agent prompt:**
+> 1. Установить unit-файлы через скрипт (7.2), `daemon-reload`, перезапустить worker.
+> 2. `journalctl -u shermos-worker --since "1 min ago" -p info | grep "WATCHDOG\|notify"` — увидеть `READY=1`.
+> 3. Симулировать зависание: `sudo kill -STOP <pid_worker>`. Подождать 70 секунд.
+> 4. Проверить: `systemctl status shermos-worker` — был перезапущен. В логах: `Watchdog timeout` от systemd, `Started` снова.
+
+**Gate Phase 7:**
+- Все 5 unit-файлов в репе.
+- На сервере watchdog активен для worker и webhook.
+- Тест с kill -STOP → автоматический рестарт через 60 сек.
+
+---
+
+## Phase 8 — Закрытие xfail (C-19, C-26, C-27)
+
+**Контекст:** в Phase 4.4 три кейса остались `xfail`. Это реальные продакшн-проблемы.
+
+### 8.1 — C-19: периодический recover_stuck_jobs
+
+**Файл:** `src/queue/worker.py`.
+
+**Бизнес-проблема:** worker умер посреди обработки → job застрял в `queue:processing:client` → клиент не получает ответа. `recover_stuck_jobs` зовётся **только при старте** worker'а (в начале `run_worker`). Если worker завис без рестарта (или watchdog отсутствует на каком-то сервисе) — job-зомби накапливаются.
+
+**План:**
+1. Создать функцию `recover_stuck_jobs_periodic_loop(redis_client, interval_seconds=300, max_age_seconds=600)`:
+   ```python
+   async def recover_stuck_jobs_periodic_loop(redis_client, interval=300, max_age=600):
+       while True:
+           try:
+               recovered = await redis_client.recover_stuck_jobs(
+                   "queue:processing:client", "queue:incoming",
+                   max_age_seconds=max_age,
+               )
+               # same for manager
+               if recovered:
+                   logger.info("recovered_stuck_jobs", extra={"count": recovered})
+           except asyncio.CancelledError:
+               raise
+           except Exception as exc:
+               logger.exception("recover_loop_error", extra={"error": str(exc)})
+           await asyncio.sleep(interval)
+   ```
+2. В `run_worker`: добавить `asyncio.create_task(recover_stuck_jobs_periodic_loop(...))` к существующим background tasks.
+3. В `RedisClient.recover_stuck_jobs` добавить параметр `max_age_seconds` если ещё нет — проходить только по job'ам со старым `received_at`.
+4. Обновить `tests/test_redis_client.py` под новый параметр.
+5. В `tests/test_e2e_client_cases.py::test_C19_worker_recovery_after_kill_simulation`:
+   - Снять `xfail`.
+   - Обновить тест: положить старый job (с received_at 11 минут назад) в processing-очередь, дать loop'у тикнуть, assert job вернулся в `queue:incoming`.
+
+**Объём:** ~50 строк кода + 1 e2e-тест. Один коммит: `feat(8.1): periodic stuck-jobs recovery in worker (closes C-19)`.
+
+### 8.2 — C-26: LLM-компрессия memory_summary
+
+**Файл:** `src/llm/conversation_memory.py:merge_memory_summary`.
+
+**Бизнес-проблема:** длинный диалог теряет ранние факты (ширину/высоту/тип стекла) при байтовой обрезке `summary[-MAX_SUMMARY_CHARS:]`.
+
+**Два возможных подхода — выбираю гибрид:**
+
+**Подход X (структурный):** хранить ключевые параметры в `conversation_state.collected_params` (это уже JSONB колонка, см. `conversation_state` table). Они **никогда не теряются** при сжатии summary. Summary остаётся для разговорного контекста.
+
+**Подход Y (LLM-сжатие):** когда summary > MAX, вызывать LLM с инструкцией «сожми, сохранив все размеры и контактные данные». Дороже (один лишний LLM-call в эпизоде сжатия), но универсальнее.
+
+**Гибрид:** Подход X — основной (бесплатный, не теряет факты), Подход Y — fallback для контекста и нечисловых деталей.
+
+**План:**
+1. Audit: убедиться, что `apply_actions` пишет ВСЕ числовые/важные параметры в `collected_params`. Проверить что нет ничего что попадает только в conversation_state.memory_summary, минуя `collected_params`.
+2. В `merge_memory_summary`: при `len(summary) > MAX_SUMMARY_CHARS`:
+   - Сначала попытаться сжать через LLM с инструкцией «не теряй: имена, телефоны, адреса, числовые размеры».
+   - Если LLM-call упал → fallback на текущее байтовое усечение (с пометкой `[older context truncated]` в начале).
+3. Сделать MAX_SUMMARY_CHARS env-настраиваемым (default 900).
+4. Обновить тесты: `tests/test_conversation_memory.py` — мокать call_llm для теста сжатия, asserть что числовые факты сохраняются.
+5. В `tests/test_e2e_client_cases.py::test_C26_long_dialog_memory_keeps_key_params`:
+   - Снять xfail.
+   - Тест: положить 100 chat_messages, в первых 5 — «ширина 2.5», в средних — болтовня. Прогнать `refresh_conversation_memory_if_needed`. Assert что в conversation_state «2.5» либо в `collected_params['width']` (если LLM сэкстракчивал), либо в `memory_summary` (если LLM-сжатие сохранило строку).
+
+**Объём:** ~80 строк + изменения тестов. Один коммит: `feat(8.2): LLM-based summary compression preserves key facts (closes C-26)`.
+
+### 8.3 — C-27: команда /reset
+
+**Файл:** `src/queue/worker.py` — handler команд клиента.
+
+**Бизнес-проблема:** есть `/clear`, нет `/reset` и NL-вариантов.
+
+**План:**
+1. В command-handler (там где обрабатывается `/clear`) добавить алиас: `if cmd in {"/clear", "/reset", "/новый", "/начать"}: ... clear conversation_state ...`.
+2. В `tests/test_e2e_client_cases.py::test_C27_reset_command_clears_state`: снять xfail. Создать conversation_state с параметрами, послать `/reset`, assert state пуст (или `mode='idle'`).
+3. NL-варианты («начать сначала», «обнулить») — это уже LLM-логика, не command parser. Обновить промпт в `prompt_builder.py` чтобы LLM эмитил `clear_state` action на такие фразы. Опционально, отдельный коммит.
+
+**Объём:** ~10 строк + 1 тест. Один коммит: `feat(8.3): /reset command alias for /clear (closes C-27)`.
+
+**Gate Phase 8:**
+- Все три xfail сняты.
+- Полный прогон интеграции на сервере: 40 passed, 0 xfailed (или 0 failed; xfail можно оставить если новый кейс появился, но эти три — нет).
+- `docs/CLIENT_CASES.md` обновлён: эти кейсы помечены ✅.
+
+---
+
+## Phase 9 — Ротация секретов (опциональная)
+
+**Зачем:** в attic'е лежал `.env.backup-manager-whatsapp-20260430-111840` со всеми боевыми токенами. Файл **никогда не был в git** (проверено `git log`), но физически 4 дня лежал в `~/shermos_bot/` на сервере. Если за это время к серверу никто посторонний не имел доступа — риск низкий. Если сомневаешься — ротировать.
+
+### 9.1 Telegram bot tokens
+
+**agent prompt:**
+> 1. В BotFather: `/mybots` → выбрать клиентский бот → API Token → Revoke current token. Получить новый.
+> 2. То же для менеджерского бота.
+> 3. На сервере обновить `.env`: `TELEGRAM_BOT_TOKEN=<new>`, `MANAGER_BOT_TOKEN=<new>`.
+> 4. В Telegram перезалить webhook'и: `curl "https://api.telegram.org/bot<NEW_TOKEN>/setWebhook?url=...&secret_token=..."` (URL и secret_token взять из текущей конфигурации).
+> 5. Рестарт `shermos-worker shermos-webhook`.
+> 6. Тест: послать `/start` через Telegram → бот ответил.
+
+### 9.2 BRIDGE_SHARED_SECRET
+
+**agent prompt:**
+> 1. На сервере: `python -c 'import secrets; print(secrets.token_urlsafe(32))'` — новый секрет.
+> 2. Обновить `.env` (`BRIDGE_SHARED_SECRET=<new>`) И env'ы обоих WhatsApp-бриджей (если они хранят секрет отдельно — `whatsapp-bridge/.env.client` / `.env.manager`).
+> 3. Рестарт `shermos-wa-client shermos-wa-manager shermos-api shermos-worker`.
+> 4. Тест: WhatsApp-сообщение → видим `whatsapp_inbound_queued` без 401.
+
+### 9.3 CMS_ADMIN_TOKEN
+
+**agent prompt:**
+> 1. Сгенерить новый: `python -c 'import secrets; print(secrets.token_urlsafe(32))'`.
+> 2. Если нигде не используется (audit `grep -r CMS_ADMIN_TOKEN`) — можно вообще убрать, есть JWT-логин.
+> 3. Иначе обновить `.env`, рестарт `shermos-api`.
+
+### 9.4 Postgres password (последний — самый рискованный)
+
+**agent prompt:**
+> 1. `docker exec shermos_bot_postgres_1 psql -U shermos -d shermos_bot -c "ALTER USER shermos PASSWORD '<new>'"`.
+> 2. Обновить `.env`: `POSTGRES_PASSWORD=<new>`.
+> 3. Рестарт ВСЕХ сервисов (`shermos-worker shermos-webhook shermos-api`).
+> 4. Тест: послать сообщение, видеть успешный inbound в логах.
+
+**Gate Phase 9 (опционально — если решил ротировать):**
+- Все 4 типа секретов ротированы.
+- Все сервисы зелёные.
+- Один тестовый flow (Telegram + WhatsApp + CMS-OTP) проходит до конца.
+
+---
+
 ## Финальный Gate
 
 Перед закрытием всего плана:
@@ -953,18 +1336,25 @@ if bot_type == "manager" and not _is_allowed_manager_phone(phone_e164):
 - [ ] Phase 3 done — CMS живой, OTP работает, CORS закрыт, CSRF на refresh.
 - [ ] Phase 4 done — testcontainers интеграционные тесты прогоняются, **30 клиентских кейсов C-01..C-30 зелёные**, coverage ≥ 70%.
 - [ ] Phase 5 done — метрики, healthcheck, runbook.
-- [ ] Релизный e2e: с холодного старта — `git pull && docker-compose -f docker-compose.prod.yml up -d --build` → все сервисы зелёные, логин в CMS работает.
+- [ ] **Phase 6 done — Frontend на Netlify, Backend только API, CORS закрыт на Netlify origin, Mini App открывается через Netlify.**
+- [ ] **Phase 7 done — watchdog активен в systemd, kill -STOP → авторестарт за 60 сек.**
+- [ ] **Phase 8 done — три xfail закрыты, integration 40/40 зелёных.**
+- [ ] **Phase 9 — опционально, по решению владельца.**
 
 ## Порядок исполнения
 
 Рекомендуемая последовательность:
-1. **Сразу:** Phase 0 (без неё всё остальное опасно делать).
-2. **Затем:** Phase 1 (визибельная боль в проде, простой фикс).
-3. Phase 2 параллельно с Phase 1, по одному коммиту за фикс.
-4. Phase 4.1 (testcontainers инфраструктура) — потому что Phase 4.2/4.3 и Phase 3 проще тестировать поверх неё.
-5. Phase 3 (CMS).
-6. Phase 4.2-4.4 (интеграционные тесты).
-7. Phase 5 (операбельность) — после стабилизации.
+1. **Сразу:** Phase 0 (без неё всё остальное опасно делать). ✅ done
+2. **Затем:** Phase 1 (визибельная боль в проде, простой фикс). ✅ done
+3. Phase 2 параллельно с Phase 1, по одному коммиту за фикс. ✅ done
+4. Phase 4.1 (серверная интеграционная инфра) — потому что Phase 4.2/4.3 и Phase 3 проще тестировать поверх неё. ✅ done
+5. Phase 3 (CMS). ✅ done
+6. Phase 4.2-4.5 (интеграционные тесты + security). ✅ done
+7. Phase 5 (операбельность) — после стабилизации. ✅ done
+8. **Phase 6 (Netlify + раздельный деплой)** — даёт стабильный URL Mini App.
+9. **Phase 7 (watchdog production wiring)** — продолжение Phase 5.3.
+10. **Phase 8 (закрытие xfail)** — три мелких бага из аудита.
+11. **Phase 9 (ротация секретов)** — опционально.
 
 ## Что НЕ входит в этот план
 
