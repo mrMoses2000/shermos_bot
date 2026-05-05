@@ -1006,6 +1006,9 @@ async def test_C26_long_dialog_memory_keeps_key_params(
 
     CHAT_ID = 110026
 
+    # FK: conversation_state.chat_id references clients.chat_id
+    await postgres.create_client(pg_pool_integration, CHAT_ID)
+
     await postgres.upsert_conversation_state(
         pg_pool_integration, CHAT_ID, "collecting", None,
         {"shape": "Прямая", "height": 2.7, "width_a": 3.5, "glass_type": "1"},
