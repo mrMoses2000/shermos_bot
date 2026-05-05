@@ -696,6 +696,41 @@ async def _notify_auto_confirmed_measurements(pg_pool, sender: WhatsAppSender, m
             )
 
 
+async def recover_stuck_jobs_periodic_loop(
+    redis_client: RedisClient,
+    interval_seconds: int = 300,
+    max_age_seconds: int = 600,
+) -> None:
+    """Periodically requeue stuck jobs from processing queues.
+
+    Runs every *interval_seconds*; only moves jobs older than *max_age_seconds*
+    so that jobs currently being processed are not accidentally requeued.
+    """
+    while True:
+        try:
+            client_recovered = await redis_client.recover_stuck_jobs(
+                CLIENT_PROCESSING_QUEUE,
+                CLIENT_QUEUE,
+                max_age_seconds=max_age_seconds,
+            )
+            manager_recovered = await redis_client.recover_stuck_jobs(
+                MANAGER_PROCESSING_QUEUE,
+                MANAGER_QUEUE,
+                max_age_seconds=max_age_seconds,
+            )
+            total = (client_recovered or 0) + (manager_recovered or 0)
+            if total:
+                logger.info(
+                    "recovered_stuck_jobs",
+                    extra={"client": client_recovered, "manager": manager_recovered},
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("recover_loop_error", extra={"error": str(exc)})
+        await asyncio.sleep(interval_seconds)
+
+
 async def _measurement_auto_confirm_loop(pg_pool, sender: WhatsAppSender, interval_seconds: int = 60) -> None:
     from src.engine.measurement_service import auto_confirm_due_measurements
 
@@ -877,6 +912,7 @@ async def run_worker() -> None:
         asyncio.create_task(run_outbox_dispatcher(pg_pool)),
         asyncio.create_task(run_gemini_health_check()),
         asyncio.create_task(_measurement_auto_confirm_loop(pg_pool, whatsapp_sender)),
+        asyncio.create_task(recover_stuck_jobs_periodic_loop(redis_client)),
     ]
     try:
         await asyncio.gather(*tasks)

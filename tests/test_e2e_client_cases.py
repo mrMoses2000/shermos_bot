@@ -751,8 +751,6 @@ async def test_C17_whatsapp_duplicate_external_id_skipped(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Stale-job recovery in _client_loop is done at startup via recover_stuck_jobs; "
-                           "there is no periodic mid-loop recovery — implement in Phase 5.")
 async def test_C19_worker_recovery_after_kill_simulation(
     pg_pool_integration,
     redis_client_integration,
@@ -762,21 +760,47 @@ async def test_C19_worker_recovery_after_kill_simulation(
 ):
     """Jobs stuck in queue:processing:client must be moved back to queue:incoming mid-loop.
 
-    TODO: Implement periodic recovery in _client_loop (not just at startup).
-    Currently recover_stuck_jobs is called once at startup; a killed worker leaves
-    jobs in the processing queue until the next restart.
+    Uses recover_stuck_jobs_periodic_loop with a very short interval so the test
+    doesn't need to wait for the default 300-second period.
     """
-    from src.queue.worker import CLIENT_PROCESSING_QUEUE, CLIENT_QUEUE
+    from src.queue.worker import CLIENT_PROCESSING_QUEUE, CLIENT_QUEUE, recover_stuck_jobs_periodic_loop
+    from datetime import timezone
 
     CHAT_ID = 110019
     UPDATE_ID = 110019
-    job = Job(update_id=UPDATE_ID, chat_id=CHAT_ID, user_id=CHAT_ID, text="stuck", msg_type="text", raw_update={})
+
+    # Create a job with a received_at well in the past (700 s ago) so it passes
+    # the max_age_seconds=5 cutoff used in the recovery loop below.
+    stale_received_at = datetime.now(timezone.utc) - timedelta(seconds=700)
+    job = Job(
+        update_id=UPDATE_ID,
+        chat_id=CHAT_ID,
+        user_id=CHAT_ID,
+        text="stuck",
+        msg_type="text",
+        raw_update={},
+        received_at=stale_received_at,
+    )
     # Directly place in processing queue (simulates crash mid-processing)
     await redis_client_integration.enqueue_job(CLIENT_PROCESSING_QUEUE, job)
 
-    # Wait to see if it migrates to the main queue on its own
-    await asyncio.sleep(3)
-    from src.db.redis_client import RedisClient
+    # Run the periodic loop manually with a short interval and tight age threshold.
+    # We cancel it after one iteration by wrapping in wait_for.
+    loop_task = asyncio.create_task(
+        recover_stuck_jobs_periodic_loop(
+            redis_client_integration,
+            interval_seconds=1,
+            max_age_seconds=5,
+        )
+    )
+    # Give the loop one tick to run
+    await asyncio.sleep(1.5)
+    loop_task.cancel()
+    try:
+        await loop_task
+    except asyncio.CancelledError:
+        pass
+
     count = await redis_client_integration.client.llen(redis_client_integration._k(CLIENT_QUEUE))
     assert count >= 1, "Job must migrate from processing to incoming without restart"
 

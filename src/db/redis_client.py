@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import redis.asyncio as redis
 
 from src.models import Job
+
+UTC = timezone.utc
 
 
 class RedisClient:
@@ -76,16 +79,50 @@ class RedisClient:
         """Remove a completed job from the processing list."""
         await self._require_client().lrem(self._k(processing_name), 1, job.model_dump_json())
 
-    async def recover_stuck_jobs(self, processing_name: str, queue_name: str) -> int:
-        """Move jobs left in processing back to the main queue on startup."""
+    async def recover_stuck_jobs(
+        self,
+        processing_name: str,
+        queue_name: str,
+        *,
+        max_age_seconds: int = 0,
+    ) -> int:
+        """Move jobs left in processing back to the main queue.
+
+        If max_age_seconds > 0, only move jobs whose ``received_at`` field is
+        older than the cutoff; jobs that are too fresh are put back and the
+        scan stops (FIFO order is preserved).  If max_age_seconds == 0 (the
+        default) all jobs are moved unconditionally — original startup-recovery
+        behaviour.
+        """
         client = self._require_client()
-        count = 0
+        full_proc = self._k(processing_name)
+        full_target = self._k(queue_name)
+        cutoff = (
+            datetime.now(UTC).timestamp() - max_age_seconds if max_age_seconds > 0 else None
+        )
+        moved = 0
         while True:
-            payload = await client.rpoplpush(self._k(processing_name), self._k(queue_name))
-            if payload is None:
+            item = await client.lpop(full_proc)
+            if item is None:
                 break
-            count += 1
-        return count
+            if cutoff is not None:
+                try:
+                    job_dict = json.loads(item)
+                    received_raw = job_dict.get("received_at", "")
+                    if received_raw:
+                        received_at = datetime.fromisoformat(received_raw)
+                        # Make timezone-aware if naive (assume UTC)
+                        if received_at.tzinfo is None:
+                            received_at = received_at.replace(tzinfo=UTC)
+                        if received_at.timestamp() > cutoff:
+                            # Job is too fresh — put it back and stop scanning
+                            await client.rpush(full_proc, item)
+                            break
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    pass  # Unknown format — move it anyway
+            await client.lpush(full_target, item)
+            moved += 1
+        return moved
 
     async def schedule_job(self, delayed_name: str, job: Job, delay_seconds: float) -> None:
         """Schedule a job for later delivery without blocking the worker loop."""

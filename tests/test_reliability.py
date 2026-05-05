@@ -97,18 +97,32 @@ async def test_ack_job_removes_from_processing():
 
 @pytest.mark.asyncio
 async def test_recover_stuck_jobs_moves_back():
-    backend = SafeRedisBackend()
-    backend.recovered = ["a", "b"]
+    """recover_stuck_jobs (no max_age) must move all items from processing to target queue."""
+    # Use the FakeRedisForRecovery-style backend: supports lpop/rpush/lpush
+    class _RecoveryBackend:
+        def __init__(self, items):
+            self.processing = list(items)
+            self.target: list = []
+
+        async def lpop(self, key: str) -> str | None:
+            if not self.processing:
+                return None
+            return self.processing.pop(0)
+
+        async def rpush(self, key: str, value: str) -> None:
+            self.processing.append(value)
+
+        async def lpush(self, key: str, value: str) -> None:
+            self.target.insert(0, value)
+
+    backend = _RecoveryBackend(["a", "b"])
     client = RedisClient("redis://localhost")
     client.client = backend
 
     count = await client.recover_stuck_jobs("queue:processing:client", "queue:incoming")
 
     assert count == 2
-    assert backend.commands == [
-        ("RPOPLPUSH", "queue:processing:client", "queue:incoming"),
-        ("RPOPLPUSH", "queue:processing:client", "queue:incoming"),
-    ]
+    assert set(backend.target) == {"a", "b"}
 
 
 @pytest.mark.asyncio

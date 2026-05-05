@@ -1,3 +1,6 @@
+import json
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from src.db.redis_client import RedisClient
@@ -117,3 +120,82 @@ async def test_key_prefix_applied_to_cache():
 
     await client.delete_cached("mykey")
     assert "t:mykey" in backend.deleted
+
+
+# ---------------------------------------------------------------------------
+# recover_stuck_jobs — max_age_seconds unit tests
+# ---------------------------------------------------------------------------
+
+class FakeRedisForRecovery:
+    """Minimal fake that supports lpop, rpush, lpush."""
+
+    def __init__(self):
+        self.lists: dict[str, list[str]] = {}
+
+    async def lpop(self, key: str) -> str | None:
+        lst = self.lists.get(key, [])
+        if not lst:
+            return None
+        return lst.pop(0)
+
+    async def rpush(self, key: str, value: str) -> None:
+        self.lists.setdefault(key, []).append(value)
+
+    async def lpush(self, key: str, value: str) -> None:
+        self.lists.setdefault(key, []).insert(0, value)
+
+
+def _make_job_payload(received_at: datetime) -> str:
+    """Return a JSON string that looks like a serialised Job with the given received_at."""
+    return json.dumps({"received_at": received_at.isoformat(), "update_id": 1, "chat_id": 1})
+
+
+@pytest.mark.asyncio
+async def test_recover_stuck_jobs_no_max_age_moves_all():
+    """Without max_age_seconds, all items are moved regardless of age."""
+    client = RedisClient("redis://localhost")
+    backend = FakeRedisForRecovery()
+    client.client = backend
+
+    fresh = datetime.now(timezone.utc)  # brand-new — would be skipped with max_age
+    backend.lists["proc"] = [_make_job_payload(fresh)]
+
+    moved = await client.recover_stuck_jobs("proc", "target")
+    assert moved == 1
+    assert backend.lists.get("target") == [_make_job_payload(fresh)]
+    assert backend.lists.get("proc", []) == []
+
+
+@pytest.mark.asyncio
+async def test_recover_stuck_jobs_max_age_moves_only_old_jobs():
+    """With max_age_seconds=300, only jobs older than 300 s are moved."""
+    client = RedisClient("redis://localhost")
+    backend = FakeRedisForRecovery()
+    client.client = backend
+
+    stale = datetime.now(timezone.utc) - timedelta(seconds=700)
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=10)
+
+    # FIFO: stale is at the front (lpop returns it first)
+    backend.lists["proc"] = [_make_job_payload(stale), _make_job_payload(fresh)]
+
+    moved = await client.recover_stuck_jobs("proc", "target", max_age_seconds=300)
+    assert moved == 1, "Only stale job should be moved"
+    # Fresh job must remain in the processing list
+    assert len(backend.lists.get("proc", [])) == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_stuck_jobs_max_age_skips_fresh_at_front():
+    """If the front job is fresh, scan stops immediately (none moved)."""
+    client = RedisClient("redis://localhost")
+    backend = FakeRedisForRecovery()
+    client.client = backend
+
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=10)
+    backend.lists["proc"] = [_make_job_payload(fresh)]
+
+    moved = await client.recover_stuck_jobs("proc", "target", max_age_seconds=300)
+    assert moved == 0
+    # The job was put back
+    assert len(backend.lists.get("proc", [])) == 1
