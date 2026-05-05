@@ -65,10 +65,18 @@ def validate_time(date: str, time: str, timezone: str) -> datetime:
     return start
 
 
-async def check_conflict(pool, start: datetime, duration_minutes: int = DEFAULT_DURATION_MINUTES) -> dict | None:
+async def check_conflict(
+    pool,
+    start: datetime,
+    duration_minutes: int = DEFAULT_DURATION_MINUTES,
+    *,
+    exclude_id: int | None = None,
+) -> dict | None:
     """Check if requested start is too close to an existing active measurement.
 
     Returns the conflicting measurement dict, or None if slot is free.
+    Pass `exclude_id` to ignore a specific measurement (e.g. when updating
+    its own time — don't conflict with self).
     """
     lower_bound = start - timedelta(minutes=MIN_START_GAP_MINUTES)
     upper_bound = start + timedelta(minutes=MIN_START_GAP_MINUTES)
@@ -79,10 +87,12 @@ async def check_conflict(pool, start: datetime, duration_minutes: int = DEFAULT_
         WHERE status IN ('scheduled', 'confirmed')
           AND scheduled_time > $1
           AND scheduled_time < $2
+          AND ($3::bigint IS NULL OR id <> $3)
         LIMIT 1
         """,
         lower_bound,
         upper_bound,
+        exclude_id,
     )
     return dict(row) if row else None
 
@@ -200,6 +210,98 @@ async def schedule_measurement(
             order_request_id,
         )
     logger.info("measurement_created", extra={"id": measurement["id"], "chat_id": chat_id, "time": start.isoformat()})
+    return measurement
+
+
+async def get_active_measurement_for_chat(pool, client_chat_id: int) -> dict | None:
+    """Return the most recent active (scheduled/confirmed) measurement for a client, if any."""
+    row = await pool.fetchrow(
+        """
+        SELECT id, client_chat_id, scheduled_time, duration_minutes, address,
+               client_name, client_phone, status, order_request_id
+        FROM measurements
+        WHERE client_chat_id = $1
+          AND status IN ('scheduled', 'confirmed')
+        ORDER BY scheduled_time DESC
+        LIMIT 1
+        """,
+        client_chat_id,
+    )
+    return dict(row) if row else None
+
+
+async def update_measurement(
+    pool,
+    measurement_id: int,
+    *,
+    date: str | None = None,
+    time: str | None = None,
+    timezone: str = "UTC",
+    client_name: str | None = None,
+    client_phone: str | None = None,
+    address: str | None = None,
+) -> dict[str, Any]:
+    """Patch fields on an existing measurement.
+
+    Time changes re-run validation + check_conflict (excluding self).
+    Only provided fields are updated; others stay as-is.
+    Raises ValueError on validation/conflict.
+    """
+    current = await pool.fetchrow(
+        "SELECT id, scheduled_time, duration_minutes FROM measurements WHERE id=$1",
+        measurement_id,
+    )
+    if not current:
+        raise ValueError(f"Замер #{measurement_id} не найден")
+
+    new_start = current["scheduled_time"]
+    if date is not None and time is not None:
+        new_start = validate_time(date, time, timezone)
+        conflict = await check_conflict(
+            pool, new_start, current["duration_minutes"], exclude_id=measurement_id
+        )
+        if conflict:
+            tz = ZoneInfo(timezone)
+            conflict_time = conflict["scheduled_time"].astimezone(tz).strftime("%H:%M")
+            raise ValueError(
+                f"Это время занято (замер в {conflict_time} для {conflict['client_name']}). "
+                f"Выберите другое время."
+            )
+
+    fields: list[str] = []
+    values: list[Any] = []
+
+    def _add(col: str, val: Any) -> None:
+        values.append(val)
+        fields.append(f"{col}=${len(values)}")
+
+    if date is not None and time is not None:
+        _add("scheduled_time", new_start)
+    if client_name is not None:
+        _add("client_name", client_name)
+    if client_phone is not None:
+        _add("client_phone", client_phone)
+    if address is not None:
+        _add("address", address)
+
+    if not fields:
+        # No-op update — return current row
+        row = await pool.fetchrow("SELECT * FROM measurements WHERE id=$1", measurement_id)
+        return dict(row)
+
+    fields.append("updated_at=now()")
+    values.append(measurement_id)
+    sql = f"UPDATE measurements SET {', '.join(fields)} WHERE id=${len(values)} RETURNING *"
+    row = await pool.fetchrow(sql, *values)
+    measurement = dict(row)
+    logger.info(
+        "measurement_updated",
+        extra={
+            "id": measurement_id,
+            "client_chat_id": measurement.get("client_chat_id"),
+            "fields": [f.split("=")[0] for f in fields if "=" in f and "now()" not in f],
+        },
+    )
     return measurement
 
 

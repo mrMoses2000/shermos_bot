@@ -248,6 +248,10 @@ shape, height, width_a/width_b/width_c, glass_type, frame_color, matting, sectio
 schedule_measurement вызывай только когда все пять measurement_* есть в state_patch.collected_params. Рабочее время 09:00-19:00, воскресенье выходной, шаг 15 минут.
 
 Если mode == "scheduling" (запись на замер уже идёт или завершена) — render_partition НЕ вызывай ни при каких условиях. Все правки касаются только данных замера.
+
+ОБНОВЛЕНИЕ ЗАМЕРА: если в state.collected_params уже есть _measurement_id (замер был ранее создан через schedule_measurement) — для смены адреса/времени/имени/телефона ОБЯЗАТЕЛЬНО используй action update_measurement с теми полями, что меняются. НЕ вызывай schedule_measurement повторно — иначе будет ошибка «время занято» из-за конфликта с уже созданным замером самого клиента.
+
+Формат update_measurement: {{ "measurement_id": <int, опционально — если есть _measurement_id, можно пропустить>, "address": "...", "time": "HH:MM" (опц.), "date": "YYYY-MM-DD" (опц.), "client_name": "..." (опц.), "phone": "..." (опц.) }}. Указывай только те поля, что реально меняются.
 state_patch обязателен в каждом ответе и должен сохранять старые + новые параметры.
 
 ═══ ДОСТУПНЫЕ МАТЕРИАЛЫ ═══

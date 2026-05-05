@@ -891,6 +891,95 @@ async def test_schedule_measurement_routes_outbox_per_channel(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_measurement_uses_state_id_and_notifies_managers(monkeypatch):
+    """When _measurement_id is in state, address change goes through update_measurement
+    (no schedule_measurement call → no self-conflict 'time taken' error)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    outbox_rows = []
+    schedule_calls = []
+    update_calls = []
+
+    fake_measurement = {
+        "id": 42,
+        "client_chat_id": 10,
+        "scheduled_time": datetime(2026, 6, 1, 11, 0, tzinfo=ZoneInfo("Asia/Bishkek")),
+        "updated_at": datetime(2026, 6, 1, 11, 0, tzinfo=ZoneInfo("Asia/Bishkek")),
+        "address": "Новый адрес 76",
+        "client_name": "Тест",
+        "client_phone": "+7900",
+        "status": "scheduled",
+    }
+
+    async def fake_schedule_measurement(**kwargs):
+        schedule_calls.append(kwargs)
+        return fake_measurement
+
+    async def fake_update_measurement(**kwargs):
+        update_calls.append(kwargs)
+        return fake_measurement
+
+    async def fake_update_client(*_args, **_kwargs):
+        return None
+
+    async def fake_upsert_state(*_args, **_kwargs):
+        return None
+
+    async def fake_get_active(_pool, _chat_id):
+        return None  # we won't fall through here — measurement_id comes from state
+
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+        outbox_rows.append({
+            "chat_id": chat_id,
+            "channel": channel,
+            "reply_text": reply_text,
+            "bot_type": bot_type,
+            "external_chat_id": external_chat_id,
+            "idempotency_key": idempotency_key,
+        })
+        return len(outbox_rows)
+
+    monkeypatch.setattr(actions_applier, "schedule_measurement", fake_schedule_measurement)
+    monkeypatch.setattr(actions_applier, "update_measurement", fake_update_measurement)
+    monkeypatch.setattr(actions_applier, "get_active_measurement_for_chat", fake_get_active)
+    monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
+
+    settings = SimpleNamespace(
+        manager_whatsapp_numbers_list=["77001234567"],
+        timezone="Asia/Bishkek",
+    )
+
+    actions = ActionsJson(
+        reply_text="Адрес обновлён.",
+        actions={
+            "update_measurement": {"address": "Новый адрес 76"},
+            "state_patch": {
+                "mode": "scheduling", "step": "confirming",
+                "collected_params": {"_measurement_id": 42},
+            },
+        },
+    )
+
+    # state.collected_params contains _measurement_id=42 — applier must use it
+    state = {"mode": "scheduling", "collected_params": {"_measurement_id": 42}}
+
+    result = await actions_applier.apply_actions(actions, 10, None, state, object(), object(), settings)
+
+    assert result["measurement"]["id"] == 42
+    assert len(schedule_calls) == 0, "schedule_measurement must NOT be called when updating"
+    assert len(update_calls) == 1
+    assert update_calls[0]["measurement_id"] == 42
+    assert update_calls[0]["address"] == "Новый адрес 76"
+    # Manager notified about the change
+    wa = next(r for r in outbox_rows if r["channel"] == "whatsapp" and r["bot_type"] == "manager")
+    assert "обновлён" in wa["reply_text"].lower()
+    assert "Новый адрес 76" in wa["reply_text"]
+
+
+@pytest.mark.asyncio
 async def test_render_partition_routes_outbox_per_channel(monkeypatch):
     """new_order: WhatsApp manager → channel='whatsapp'."""
     outbox_rows = []

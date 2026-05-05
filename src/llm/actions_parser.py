@@ -13,6 +13,7 @@ from src.models import (
     ScheduleMeasurementAction,
     StatePatch,
     UpdateClientProfileAction,
+    UpdateMeasurementAction,
 )
 from src.utils.json_tools import ensure_json_object
 
@@ -77,6 +78,10 @@ def _validate_nested(actions: dict[str, Any] | None) -> dict[str, Any] | None:
     if "schedule_measurement" in cleaned:
         cleaned["schedule_measurement"] = ScheduleMeasurementAction(
             **cleaned["schedule_measurement"]
+        ).model_dump()
+    if "update_measurement" in cleaned:
+        cleaned["update_measurement"] = UpdateMeasurementAction(
+            **cleaned["update_measurement"]
         ).model_dump()
     if "update_client_profile" in cleaned:
         cleaned["update_client_profile"] = UpdateClientProfileAction(

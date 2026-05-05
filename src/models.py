@@ -70,6 +70,22 @@ class ScheduleMeasurementAction(BaseModel):
     address: str = Field(min_length=1)
 
 
+class UpdateMeasurementAction(BaseModel):
+    """Update an existing measurement's contact / time fields without re-scheduling.
+
+    Used when client wants to change address, time, name or phone after
+    schedule_measurement already created a row. All fields optional; provide
+    only what's changing. measurement_id is auto-resolved from
+    conversation_state._measurement_id when absent.
+    """
+    measurement_id: Optional[int] = None
+    date: Optional[str] = None
+    time: Optional[str] = None
+    client_name: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+
+
 class UpdateClientProfileAction(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None

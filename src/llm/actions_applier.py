@@ -7,7 +7,11 @@ from uuid import uuid4
 from src.bot.keyboards import manager_measurement_keyboard
 from src.db import postgres
 from src.engine.fsm import is_valid_transition
-from src.engine.measurement_service import schedule_measurement
+from src.engine.measurement_service import (
+    get_active_measurement_for_chat,
+    schedule_measurement,
+    update_measurement,
+)
 from src.engine.pricing_cache import pricing_cache
 from src.engine.pricing_engine import calculate_price
 from src.engine.render_requirements import merge_render_params, missing_render_params
@@ -18,6 +22,7 @@ from src.models import (
     ScheduleMeasurementAction,
     StatePatch,
     UpdateClientProfileAction,
+    UpdateMeasurementAction,
 )
 from src.utils.json_tools import ensure_json_object
 from src.utils.query_parser import normalize_render_params
@@ -298,6 +303,9 @@ async def apply_actions(
             ),
         )
         result["measurement"] = measurement
+        # Remember measurement id in state so subsequent edits go through
+        # update_measurement instead of re-running schedule_measurement.
+        system_collected_patch["_measurement_id"] = int(measurement["id"])
 
         # Notify ALL managers about new measurement
         m_id = measurement["id"]
@@ -325,6 +333,84 @@ async def apply_actions(
                 bot_type="manager",
                 idempotency_key=f"new_measurement:{m_id}:{manager_phone}",
             )
+
+    if actions.actions.get("update_measurement"):
+        params = UpdateMeasurementAction(**actions.actions["update_measurement"])
+
+        # Resolve measurement_id: prefer explicit, then state, then active row in DB.
+        m_id = params.measurement_id
+        if m_id is None:
+            stored = current_collected.get("_measurement_id")
+            try:
+                m_id = int(stored) if stored is not None else None
+            except (TypeError, ValueError):
+                m_id = None
+        if m_id is None:
+            active = await get_active_measurement_for_chat(pg_pool, chat_id)
+            if active:
+                m_id = int(active["id"])
+        if m_id is None:
+            raise ValueError("Не нашёл активный замер для обновления — запишитесь сначала.")
+
+        # Update client profile if name/phone/address provided (mirror schedule_measurement).
+        if any(x is not None for x in (params.client_name, params.phone, params.address)):
+            await postgres.update_client(
+                pg_pool, chat_id,
+                name=params.client_name, phone=params.phone, address=params.address,
+            )
+
+        measurement = await update_measurement(
+            pool=pg_pool,
+            measurement_id=m_id,
+            date=params.date,
+            time=params.time,
+            timezone=settings.timezone,
+            client_name=params.client_name,
+            client_phone=params.phone,
+            address=params.address,
+        )
+        result["measurement"] = measurement
+        system_collected_patch["_measurement_id"] = int(measurement["id"])
+        # Mirror provided fields back into collected_params so state stays consistent.
+        if params.date:
+            system_collected_patch["measurement_date"] = params.date
+        if params.time:
+            system_collected_patch["measurement_time"] = params.time
+        if params.client_name is not None:
+            system_collected_patch["measurement_name"] = params.client_name
+        if params.phone is not None:
+            system_collected_patch["measurement_phone"] = params.phone
+        if params.address is not None:
+            system_collected_patch["measurement_address"] = params.address
+
+        # Notify managers about the change (best-effort via outbox).
+        m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
+        changed_lines = []
+        if params.date or params.time:
+            changed_lines.append(f"⏰ Новое время: <b>{m_time}</b>")
+        if params.address:
+            changed_lines.append(f"📍 Новый адрес: {params.address}")
+        if params.client_name:
+            changed_lines.append(f"👤 Имя: {params.client_name}")
+        if params.phone:
+            changed_lines.append(f"📞 Телефон: {params.phone}")
+        notify_text = (
+            f"<b>Замер #{m_id} обновлён клиентом</b>\n\n"
+            + "\n".join(changed_lines)
+        ) if changed_lines else None
+
+        if notify_text:
+            for manager_phone in getattr(settings, "manager_whatsapp_numbers_list", []):
+                await postgres.insert_outbound_event(
+                    pg_pool,
+                    chat_id=int(manager_phone),
+                    channel="whatsapp",
+                    external_chat_id=f"{manager_phone}@s.whatsapp.net",
+                    reply_text=notify_text,
+                    reply_markup=None,
+                    bot_type="manager",
+                    idempotency_key=f"meas_updated:{m_id}:{int(measurement.get('updated_at', measurement['scheduled_time']).timestamp())}:{manager_phone}",
+                )
 
     if actions.actions.get("state_patch"):
         patch = StatePatch(**actions.actions["state_patch"])
