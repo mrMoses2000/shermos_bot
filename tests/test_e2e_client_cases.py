@@ -1044,8 +1044,6 @@ async def test_C26_long_dialog_memory_keeps_key_params(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="No /reset or 'начать сначала' command in src/queue/worker.py. "
-                           "Only /clear exists. TODO: add /reset alias in Phase 5.")
 async def test_C27_reset_command_clears_state(
     pg_pool_integration,
     redis_client_integration,
@@ -1057,13 +1055,15 @@ async def test_C27_reset_command_clears_state(
     CHAT_ID = 110027
     UPDATE_ID = 110027
 
+    # Pre-populate so that there is something to clear
+    await postgres.create_client(pg_pool_integration, CHAT_ID, "Reset User", "reset_user")
     await postgres.upsert_conversation_state(
         pg_pool_integration, CHAT_ID, "collecting", "step1",
         {"shape": "Прямая", "height": 2.5},
     )
 
-    update = _telegram_update(UPDATE_ID, CHAT_ID, "/reset", msg_type="command")
-    await _ingest_telegram(pg_pool_integration, redis_client_integration, update)
+    update = _telegram_update(UPDATE_ID, CHAT_ID, "/reset")
+    await _ingest_telegram(pg_pool_integration, redis_client_integration, update, msg_type="command")
 
     status = await asyncio.wait_for(
         _poll_update_status(pg_pool_integration, UPDATE_ID, "completed"), timeout=10
@@ -1072,6 +1072,14 @@ async def test_C27_reset_command_clears_state(
 
     state = await postgres.get_conversation_state(pg_pool_integration, CHAT_ID)
     assert (state is None) or (state.get("mode") == "idle"), "State must be cleared by /reset"
+
+    # Verify the friendly reset reply was queued in outbound
+    rows = await pg_pool_integration.fetch(
+        "SELECT reply_text FROM outbound_events WHERE chat_id=$1", CHAT_ID
+    )
+    assert any("сброшено" in (r["reply_text"] or "").lower() for r in rows), (
+        "Expected reset confirmation message in outbound events"
+    )
 
 
 # ---------------------------------------------------------------------------

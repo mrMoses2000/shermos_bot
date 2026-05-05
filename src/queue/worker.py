@@ -122,7 +122,7 @@ CLIENT_COMMANDS = {
 
 async def _handle_client_command(job: Job, pg_pool, sender: WhatsAppSender) -> bool:
     text = (job.text or "").split()[0].lower()
-    if text == "/clear":
+    if text in ("/clear", "/reset"):
         await postgres.clear_chat_messages(pg_pool, job.chat_id)
         try:
             await postgres.delete_conversation_memory(pg_pool, job.chat_id)
@@ -130,12 +130,18 @@ async def _handle_client_command(job: Job, pg_pool, sender: WhatsAppSender) -> b
             logger.warning("conversation_memory_delete_failed", extra={"chat_id": job.chat_id, "error": str(exc)})
         await postgres.abandon_current_order_draft(pg_pool, job.chat_id, cancel_order=True)
         await postgres.upsert_conversation_state(pg_pool, job.chat_id, "idle", None, {})
+        reply = (
+            "Состояние сброшено, начнём сначала."
+            if text == "/reset"
+            else "История диалога очищена."
+        )
+        logger.info("command_clear_reset", extra={"chat_id": job.chat_id, "command": text})
         await send_and_record(
             pg_pool,
             sender,
             "",
             job.chat_id,
-            "История диалога очищена.",
+            reply,
         )
         return True
     if text in {"/cancel", "/cancel_order"}:
