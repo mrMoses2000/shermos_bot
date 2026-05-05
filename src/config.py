@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     otp_max_attempts: int = 5
     otp_rate_limit_1h: int = 10
 
+    cors_allowed_origins: str = ""  # comma-separated; empty = no CORS allowed
+
     bridge_shared_secret: str = ""
     whatsapp_bridge_url: str = "http://localhost:3001"
     manager_whatsapp_bridge_url: str = ""
@@ -71,6 +73,12 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     log_format: str = "json"
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        if not self.cors_allowed_origins:
+            return []
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
 
     @property
     def webhook_url_client(self) -> str:

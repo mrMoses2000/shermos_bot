@@ -45,10 +45,16 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Shermos Mini App API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=settings.cors_allowed_origins_list,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "X-Telegram-Init-Data",
+            "X-CMS-Admin-Token",
+            "X-CSRF-Token",
+            "Content-Type",
+        ],
     )
     app.include_router(routes_auth.router)
     app.include_router(routes_orders.router)

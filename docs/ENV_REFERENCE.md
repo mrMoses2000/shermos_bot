@@ -90,8 +90,10 @@
 | `JWT_ISSUER` | нет | `shermos-api` | |
 | `JWT_TTL_DAYS` | нет | `7` | |
 | `JWT_REFRESH_TTL_DAYS` | нет | `30` | |
-| `OTP_EXPIRY_MINUTES` | нет | `10` | |
-| `OTP_MAX_ATTEMPTS` | нет | `5` | |
+| `OTP_EXPIRY_MINUTES` | нет | `10` | Время жизни OTP-кода в минутах |
+| `OTP_MAX_ATTEMPTS` | нет | `5` | Максимум неверных попыток до сброса OTP |
+| `OTP_RATE_LIMIT_1H` | нет | `10` | Максимум отправок OTP с одного номера в час |
+| `CORS_ALLOWED_ORIGINS` | нет | `""` | Comma-separated список разрешённых CORS-источников; e.g. `https://cms.shermos.example,https://t.me`. Пусто = блокировать все браузерные CORS-запросы. |
 | `CMS_ADMIN_TOKEN` | нет | `""` | Статический токен для CMS-admin эндпоинтов |
 | `MINI_APP_URL` | нет | `""` | URL Telegram Mini App |
 
