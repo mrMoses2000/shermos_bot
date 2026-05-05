@@ -1224,20 +1224,20 @@ async def test_C31_reminder_sent_one_hour_before(
 
     await postgres.create_client(pg_pool_integration, CHAT_ID)
 
+    # Insert a confirmed measurement scheduled 58 min from now, bypassing
+    # schedule_measurement's 15-min/working-hours validation — we're
+    # testing the reminder loop, not the scheduler.
     target = datetime.now(_tz.utc) + timedelta(minutes=58)
-    m = await schedule_measurement(
-        pool=pg_pool_integration,
-        chat_id=CHAT_ID,
-        date=target.strftime("%Y-%m-%d"),
-        time=target.strftime("%H:%M"),
-        client_name="Test",
-        phone="+77001234567",
-        address="Test Addr",
-        timezone="UTC",
+    m_id = await pg_pool_integration.fetchval(
+        """
+        INSERT INTO measurements (chat_id, scheduled_time, duration_minutes, status,
+                                   client_name, client_phone, address)
+        VALUES ($1, $2, 60, 'confirmed', 'Test', '+77001234567', 'Test Addr')
+        RETURNING id
+        """,
+        CHAT_ID, target,
     )
-    await pg_pool_integration.execute(
-        "UPDATE measurements SET status='confirmed' WHERE id=$1", m["id"]
-    )
+    m = {"id": m_id}
 
     task = asyncio.create_task(worker_mod._measurement_reminder_loop(pg_pool_integration, interval_seconds=1))
     try:

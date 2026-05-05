@@ -226,8 +226,10 @@ async def test_whatsapp_staff_routes_to_manager_queue(
     monkeypatch,
 ):
     """
-    A sender whose phone IS in manager_whatsapp_numbers must be routed to
-    queue:manager with bot_type='manager', regardless of bridge_role.
+    A sender whose phone IS in manager_whatsapp_numbers AND who writes to
+    the MANAGER bridge must be routed to queue:manager.
+    Staff writing to the CLIENT bridge stays in the client flow (so staff
+    can QA the client UX from their own phone).
     """
     staff_phone = "70007776655"
 
@@ -253,7 +255,7 @@ async def test_whatsapp_staff_routes_to_manager_queue(
         external_id=external_id,
         phone_e164=staff_phone,
         text="/health",
-        bridge_role="client",  # incoming on client number but sender IS staff
+        bridge_role="manager",  # staff message MUST arrive on manager bridge to be routed to manager queue
     )
     result = await enqueue_whatsapp_inbound(pg_pool_integration, redis_client_integration, payload)
     assert result["queued"] is True
