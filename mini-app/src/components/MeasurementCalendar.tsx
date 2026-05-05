@@ -1,5 +1,7 @@
 import OrderStatusBadge from "./OrderStatusBadge";
 
+const BUSINESS_TIME_ZONE = "Asia/Bishkek";
+
 export type Measurement = {
   id: number;
   scheduled_time: string;
@@ -12,6 +14,7 @@ function formatDateKey(value: string) {
   return new Date(value).toLocaleDateString("ru-RU", {
     day: "2-digit",
     month: "long",
+    timeZone: BUSINESS_TIME_ZONE,
     weekday: "long"
   });
 }
@@ -19,7 +22,9 @@ function formatDateKey(value: string) {
 function formatTime(value: string) {
   return new Date(value).toLocaleTimeString("ru-RU", {
     hour: "2-digit",
-    minute: "2-digit"
+    hour12: false,
+    minute: "2-digit",
+    timeZone: BUSINESS_TIME_ZONE
   });
 }
 
