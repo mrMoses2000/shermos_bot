@@ -85,6 +85,22 @@ def test_build_prompt_includes_context_and_contract():
     assert "хочу перегородку" in prompt
 
 
+def test_build_prompt_instructs_to_mirror_client_language():
+    """Phase 11: LLM must reply in the same language as the client's last message."""
+    prompt = build_prompt(
+        "Salam, men 2.5 m kenglikdagi devor istayman",
+        None,
+        {"mode": "idle", "step": "ask_shape", "collected_params": {}},
+        [],
+    )
+    # The system prompt must contain the language-mirroring instruction
+    # so Gemini answers in Kyrgyz / English / etc. when the client uses them.
+    assert "ЯЗЫК ОТВЕТА" in prompt
+    assert "том же языке" in prompt or "ТОМ ЖЕ языке" in prompt
+    assert "кыргызский" in prompt
+    assert "английский" in prompt
+
+
 def test_build_prompt_compacts_long_history():
     messages = [
         {"role": "user", "text": f"старое {idx}"}

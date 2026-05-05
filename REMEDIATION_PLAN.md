@@ -1341,6 +1341,91 @@ echo "Done. Restart with: sudo systemctl restart shermos-{worker,webhook,api,wa-
 - [ ] **Phase 8 done — три xfail закрыты, integration 40/40 зелёных.**
 - [ ] **Phase 9 — опционально, по решению владельца.**
 - [ ] **Phase 10 done — Telegram-стек полностью удалён, оба бота работают только через WhatsApp.**
+- [x] **Phase 11 done — клиент-LLM отвечает на языке клиента (auto-mirror через system_prompt).**
+- [ ] **Phase 12 done — рендер ручки: уточняющий вопрос «снаружи / внутри / с обеих сторон» + поддержка в render_engine.**
+- [ ] **Phase 13 done — реальные напоминания за час до замера (cron-loop + тест), а не только обещание в шаблоне.**
+- [ ] **Phase 14 done — менеджерский бот понимает свободный текст («что у нас по заказам?») через LLM-парсер, а не только команды.**
+
+---
+
+## Phase 11 — Клиентский язык (auto-mirror) ✅
+
+Сделано одним коммитом 2026-05-05. В `src/llm/prompt_builder.py` system_prompt начинает с инструкции «отвечай на ТОМ ЖЕ языке, на котором написано последнее сообщение клиента». Gemini сама детектит ru/ky/kk/en и отвечает на нём. Захардкоженные сообщения бота (`/start` приветствие, OTP в WhatsApp мастеру, fallback-ответы) остаются на русском — мастер русскоязычный.
+
+Покрыто тестом `test_build_prompt_instructs_to_mirror_client_language` в `tests/test_prompt_builder.py`.
+
+**Если в будущем понадобится перевод и захардкоженных строк** — это Phase 11.5: вынести строки в `src/i18n/messages.py` словарь, детектить язык на первом сообщении и сохранять в `conversation_state.language`.
+
+---
+
+## Phase 12 — Render: сторона ручки (inside / outside / both)
+
+**Зачем:** сейчас `_create_handle` в `src/render/create_partition.py` всегда крепит ручку с положительной Z-координатой (внутрь). Для душевых перегородок это критично: дверь открывается на себя, ручка с внутренней стороны = неудобно. Нужно: уточнять у клиента и поддерживать три варианта.
+
+**12.1 Action schema + render**
+- `src/llm/tools_schema.py` (или `src/llm/actions_parser.py`): добавить поле `handle_side: Literal["inside","outside","both"] = "inside"` в `RenderPartitionAction`.
+- `src/render/create_partition.py:_create_handle`: принять `handle_side` параметром.
+  - `outside`: использовать `-handle_depth/2 - 0.01` для Z.
+  - `both`: создать ДВЕ ручки, обе геометрии в `handle_parts`.
+  - `inside` (default): без изменений.
+- `src/render/validators.py:validate_handle`: добавить валидацию допустимых значений `handle_side`.
+
+**12.2 LLM prompt + collection**
+- `src/engine/render_requirements.py`: считать `handle_side` обязательным параметром если `add_handle=true`. В check `_missing_render_params` перечислить.
+- `src/llm/prompt_builder.py:_missing_params_section`: ввести строку «Сторона ручки: внутри / снаружи / с обеих сторон».
+
+**12.3 Тесты**
+- `tests/test_render.py`: создать рендер с `handle_side="outside"`, ассертить что геометрия ручки имеет отрицательную Z.
+- `tests/test_render.py`: `handle_side="both"`, ассертить 2 геометрии.
+- `tests/test_render_requirements.py`: `add_handle=true, handle_side missing` → требует уточнения.
+- `tests/test_prompt_builder.py`: `_missing_params_section` показывает «сторона ручки» когда отсутствует.
+
+**Объём:** ~80 строк кода + 4 теста. Один коммит: `feat(12): handle side (inside/outside/both) in render + collection`.
+
+---
+
+## Phase 13 — Реальные напоминания за час до замера
+
+**Зачем:** в `actions_applier.py` шаблон ответа на `schedule_measurement` обещает «За час до визита мы отправим вам напоминание». **Никакого reminder-loop в коде нет** (`grep -E "reminder|напоминан|3600"` пусто). Это враньё в UI.
+
+**13.1 Loop в worker'е**
+- В `src/engine/measurement_service.py`: новая функция `get_due_reminders(pool, window_minutes=5)` — выдаёт `measurements` где `status='confirmed' AND scheduled_time BETWEEN now()+55min AND now()+60min AND reminder_sent_at IS NULL`.
+- Миграция 023: добавить колонку `measurements.reminder_sent_at TIMESTAMPTZ`.
+- В `src/queue/worker.py`: новый async-loop `_measurement_reminder_loop(pg_pool, interval_seconds=60)` — каждую минуту выбирает due-reminders, отправляет клиенту WhatsApp-уведомление через outbox: «Напоминаем: через час, в HH:MM, к вам приедет мастер на замер. Адрес: …», помечает `reminder_sent_at=now()`.
+- Зарегистрировать loop в `run_worker`.
+
+**13.2 Менеджерский reminder (опц.)**
+- Параллельно отправлять менеджеру: «Замер #N через 1 час, клиент …». Тоже через outbox.
+
+**13.3 Тесты**
+- `tests/test_e2e_client_cases.py::test_C31_reminder_sent_one_hour_before` — создать confirmed-measurement с `scheduled_time=now()+58 min`, дать loop'у тикнуть, assert outbound с текстом-напоминанием создан, `reminder_sent_at` обновлён.
+- Тест что `reminder_sent_at IS NOT NULL` блокирует повторную отправку (idempotent).
+
+**Объём:** ~60 строк + миграция + 2 теста. Один коммит: `feat(13): real measurement reminders one hour before visit`.
+
+---
+
+## Phase 14 — Менеджерский бот понимает свободный текст
+
+**Зачем:** сейчас `process_manager_job` обрабатывает только конкретные команды. На «что у нас по заказам?» — фолбэк «Команды: /orders, /health». Менеджер должен мочь спрашивать на естественном языке.
+
+**14.1 LLM-роутинг**
+- В `process_manager_job` после проверки явных команд — если ничего не сматчилось и текст НЕ начинается с `/`, отправить его в Gemini с **отдельным system_prompt'ом** (новый `manager_prompt_builder.py`) типа: «Ты — внутренний ассистент мастера Shermos. У тебя есть инструменты: list_orders(limit), list_measurements(date), get_order_details(request_id). Парси запрос мастера и вызови подходящий инструмент. Возвращай JSON с tool_call».
+- Парсить tool_call → выполнять реальную SQL → форматировать ответ → отправлять менеджеру.
+
+**14.2 Tool-set**
+Минимум:
+- `list_recent_orders(limit=10)` — последние заказы.
+- `list_upcoming_measurements()` — ближайшие замеры.
+- `get_order(request_id)` — детали заказа.
+- `cancel_measurement(measurement_id)` — отмена.
+
+**14.3 Тесты**
+- `tests/test_e2e_manager_nl.py` (или в client_cases): «что у нас по заказам?» → mock LLM возвращает `list_recent_orders` → assert ответ содержит ID заказов из БД.
+
+**Объём:** ~150 строк + новый prompt + 3-4 теста. Один коммит: `feat(14): manager bot — NL queries via LLM tool routing`.
+
+**Замечание:** ↑ можно отложить, если мастеру комфортно с командами. Текущий fallback («Команды: /orders, /health») явно показывает что доступно — не «глух».
 
 ---
 
