@@ -23,7 +23,10 @@ def build_manager_prompt(user_message: str) -> str:
 4. cancel_measurement — отменить замер по id.
    args: {{"measurement_id": int}}
 
-5. unknown — если запрос непонятен или вне твоих возможностей.
+5. propose_reschedule — предложить клиенту другое время (если мастер занят).
+   args: {{"measurement_id": int, "new_time": "HH:MM", "new_date": "YYYY-MM-DD" (опц., если не указано — та же дата), "reason": "..." (опц.)}}
+
+6. unknown — если запрос непонятен или вне твоих возможностей.
    args: {{}}, comment объясни мастеру что ты не понял.
 
 ═══ ПРИМЕРЫ ═══
@@ -37,8 +40,14 @@ def build_manager_prompt(user_message: str) -> str:
 Мастер: «детали заказа 2fdb6a4b»
 {{"tool": "get_order_details", "args": {{"request_id": "2fdb6a4b"}}, "comment": "детали заказа"}}
 
-Мастер: «отмени замер 5»
-{{"tool": "cancel_measurement", "args": {{"measurement_id": 5}}, "comment": "отмена замера"}}
+Мастер: «отмени замер 7»
+{{"tool": "cancel_measurement", "args": {{"measurement_id": 7}}, "comment": "отмена замера"}}
+
+Мастер: «не могу в это время на замере 10, предложи клиенту на 17:00»
+{{"tool": "propose_reschedule", "args": {{"measurement_id": 10, "new_time": "17:00", "reason": "не могу в это время"}}, "comment": "перенос на 17:00"}}
+
+Мастер: «занят на замере 5 завтра, давай на 11:00»
+{{"tool": "propose_reschedule", "args": {{"measurement_id": 5, "new_time": "11:00", "reason": "занят"}}, "comment": "перенос замера 5 на 11:00"}}
 
 Мастер: «погода в Москве»
 {{"tool": "unknown", "args": {{}}, "comment": "это не моя зона ответственности"}}

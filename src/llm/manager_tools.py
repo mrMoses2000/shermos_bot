@@ -99,11 +99,69 @@ async def cancel_measurement(pg_pool, args: dict[str, Any]) -> str:
     return f"❌ Замер #{mid} ({when}) отменён."
 
 
+async def propose_reschedule(pg_pool, args: dict[str, Any]) -> str:
+    from src.engine.measurement_service import propose_reschedule as _propose
+    from src.config import settings
+
+    try:
+        mid = int(args.get("measurement_id"))
+    except (TypeError, ValueError):
+        return "Не понял номер замера."
+    new_time = str(args.get("new_time") or "").strip()
+    if not new_time:
+        return "Не понял новое время — укажи в формате HH:MM."
+    new_date = args.get("new_date")
+    new_date = str(new_date).strip() if new_date else None
+    reason = str(args.get("reason") or "").strip()
+
+    try:
+        m = await _propose(
+            pg_pool,
+            mid,
+            new_date=new_date,
+            new_time=new_time,
+            timezone=settings.timezone,
+            reason=reason,
+        )
+    except ValueError as exc:
+        return f"Не получилось: {exc}"
+
+    # Notify the client via outbox
+    proposed = m["pending_reschedule_at"]
+    proposed_str = proposed.strftime("%d.%m %H:%M")
+    old_str = m["scheduled_time"].strftime("%d.%m %H:%M")
+    client_chat_id = int(m["client_chat_id"])
+
+    reason_block = f"\n\nПричина: {reason}" if reason else ""
+    client_text = (
+        f"Здравствуйте! Мастер не сможет приехать в <b>{old_str}</b>.{reason_block}\n\n"
+        f"Можно перенести на <b>{proposed_str}</b>?\n"
+        "Напишите «да», если подходит, или предложите другое удобное время."
+    )
+
+    await postgres.insert_outbound_event(
+        pg_pool,
+        chat_id=client_chat_id,
+        channel="whatsapp",
+        external_chat_id=f"{client_chat_id}@s.whatsapp.net",
+        reply_text=client_text,
+        bot_type="client",
+        idempotency_key=f"reschedule_proposal:{mid}:{int(proposed.timestamp())}",
+    )
+
+    return (
+        f"✅ Клиенту отправлено предложение перенести замер #{mid}\n"
+        f"с <b>{old_str}</b> на <b>{proposed_str}</b>.\n"
+        "Жду подтверждения от клиента."
+    )
+
+
 TOOLS = {
     "list_recent_orders": list_recent_orders,
     "list_upcoming_measurements": list_upcoming_measurements,
     "get_order_details": get_order_details,
     "cancel_measurement": cancel_measurement,
+    "propose_reschedule": propose_reschedule,
 }
 
 

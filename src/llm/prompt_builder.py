@@ -197,6 +197,36 @@ def _order_context_section(state: dict[str, Any]) -> str:
     )
 
 
+def _pending_reschedule_section(pending_reschedule_info: dict[str, Any] | None) -> str:
+    """Render a block informing the client LLM about a pending master reschedule proposal."""
+    if not pending_reschedule_info:
+        return ""
+    proposed_at = pending_reschedule_info.get("proposed_at")
+    reason = str(pending_reschedule_info.get("reason") or "").strip()
+    current_scheduled = pending_reschedule_info.get("current_scheduled")
+
+    if hasattr(proposed_at, "strftime"):
+        proposed_str = proposed_at.strftime("%d.%m.%Y %H:%M")
+    else:
+        proposed_str = str(proposed_at)
+
+    if hasattr(current_scheduled, "strftime"):
+        current_str = current_scheduled.strftime("%d.%m.%Y %H:%M")
+    else:
+        current_str = str(current_scheduled) if current_scheduled else "—"
+
+    reason_line = f"\nПричина: {reason}" if reason else ""
+
+    return (
+        "\n═══ ПРЕДЛОЖЕНИЕ ОТ МАСТЕРА (ожидает ответа клиента) ═══\n\n"
+        f"Мастер не может в текущее время ({current_str}) и предлагает: {proposed_str}.{reason_line}\n\n"
+        "ЕСЛИ клиент в этом сообщении соглашается (\"да\", \"подходит\", \"хорошо\", \"ок\") — "
+        f"вызови update_measurement с новой датой/временем из этого предложения ({proposed_str}).\n"
+        "ЕСЛИ клиент предлагает СВОЁ время — вызови update_measurement со временем клиента.\n"
+        "ЕСЛИ клиент отказывается — не вызывай update_measurement; просто сообщи, что время осталось прежним.\n"
+    )
+
+
 def build_prompt(
     user_message: str,
     client_profile: dict[str, Any] | None,
@@ -204,6 +234,7 @@ def build_prompt(
     chat_messages: list[dict[str, Any]],
     available_slots: dict[str, list[str]] | None = None,
     conversation_memory: dict[str, Any] | None = None,
+    pending_reschedule_info: dict[str, Any] | None = None,
 ) -> str:
     profile_text = "Новый клиент — имя/телефон неизвестны."
     if client_profile:
@@ -310,7 +341,7 @@ state_patch обязателен в каждом ответе и должен с
 ═══ ДОСТУПНЫЕ СЛОТЫ ДЛЯ ЗАМЕРА ═══
 
 {_slots_section(available_slots)}
-
+{_pending_reschedule_section(pending_reschedule_info)}
 ═══ ИСТОРИЯ ДИАЛОГА (последние сообщения) ═══
 
 {chr(10).join(history_lines) if history_lines else "(Новый диалог — поприветствуй клиента!)"}

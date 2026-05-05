@@ -3,6 +3,7 @@ import json
 import pytest
 from src.llm import manager_tools
 from src.llm.manager_prompt_builder import build_manager_prompt
+from datetime import datetime, timezone as tz_mod
 
 
 def test_build_manager_prompt_includes_user_message():
@@ -55,3 +56,69 @@ async def test_get_order_details_not_found(monkeypatch):
 async def test_cancel_measurement_invalid_id():
     out = await manager_tools.cancel_measurement(object(), {"measurement_id": "abc"})
     assert "не понял" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_propose_reschedule_creates_client_outbox(monkeypatch):
+    """propose_reschedule tool produces a client outbox row + master receipt."""
+    outbox_rows = []
+
+    async def fake_propose(_pool, mid, *, new_date, new_time, timezone, reason):
+        return {
+            "id": mid,
+            "client_chat_id": 110099,
+            "scheduled_time": datetime(2026, 5, 6, 11, 0, tzinfo=tz_mod.utc),
+            "pending_reschedule_at": datetime(2026, 5, 6, 17, 0, tzinfo=tz_mod.utc),
+            "pending_reschedule_reason": reason,
+        }
+
+    async def fake_insert_outbound(
+        _pool, *, chat_id, channel, external_chat_id, reply_text,
+        bot_type, idempotency_key, **_kwargs
+    ):
+        outbox_rows.append({
+            "chat_id": chat_id,
+            "text": reply_text,
+            "bot_type": bot_type,
+            "idem": idempotency_key,
+        })
+        return 1
+
+    import src.engine.measurement_service as svc_mod
+    monkeypatch.setattr(svc_mod, "propose_reschedule", fake_propose)
+    monkeypatch.setattr(manager_tools.postgres, "insert_outbound_event", fake_insert_outbound)
+
+    out = await manager_tools.propose_reschedule(
+        object(),
+        {"measurement_id": 10, "new_time": "17:00", "reason": "не могу в это время"},
+    )
+    assert "замер #10" in out
+    assert "17:00" in out
+    assert len(outbox_rows) == 1
+    assert outbox_rows[0]["chat_id"] == 110099
+    assert outbox_rows[0]["bot_type"] == "client"
+    assert "17:00" in outbox_rows[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_propose_reschedule_invalid_id_returns_error():
+    out = await manager_tools.propose_reschedule(object(), {"measurement_id": "abc", "new_time": "17:00"})
+    assert "не понял" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_propose_reschedule_missing_time_returns_error():
+    out = await manager_tools.propose_reschedule(object(), {"measurement_id": 5, "new_time": ""})
+    assert "не понял" in out.lower()
+
+
+def test_manager_prompt_includes_propose_reschedule():
+    p = build_manager_prompt("не могу на замере 10, предложи на 17:00")
+    assert "propose_reschedule" in p
+    assert "не могу" in p.lower()
+
+
+def test_manager_prompt_has_propose_reschedule_example():
+    p = build_manager_prompt("test")
+    assert "propose_reschedule" in p
+    assert "new_time" in p

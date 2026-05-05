@@ -364,3 +364,175 @@ async def test_mark_reminder_sent_updates_correct_row():
     _kind, sql, args = pool.calls[0]
     assert "reminder_sent_at = now()" in sql
     assert args == (42,)
+
+
+# ─── propose_reschedule ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_propose_reschedule_saves_pending_fields():
+    future = _future_date()
+    current_start = measurement_service.validate_time(future, "11:00", TZ)
+    proposed_start = measurement_service.validate_time(future, "17:00", TZ)
+
+    pool = FakePool(
+        fetchrow_results=[
+            # SELECT current row
+            {
+                "id": 10,
+                "scheduled_time": current_start,
+                "duration_minutes": 45,
+                "client_chat_id": 99001,
+            },
+            # check_conflict returns None (no conflict)
+            None,
+            # UPDATE RETURNING *
+            {
+                "id": 10,
+                "scheduled_time": current_start,
+                "duration_minutes": 45,
+                "client_chat_id": 99001,
+                "pending_reschedule_at": proposed_start,
+                "pending_reschedule_reason": "не могу",
+            },
+        ]
+    )
+
+    result = await measurement_service.propose_reschedule(
+        pool,
+        10,
+        new_date=future,
+        new_time="17:00",
+        timezone=TZ,
+        reason="не могу",
+    )
+
+    assert result["pending_reschedule_at"] == proposed_start
+    assert result["pending_reschedule_reason"] == "не могу"
+    # Verify UPDATE query was called
+    update_calls = [c for c in pool.calls if c[0] == "fetchrow" and "pending_reschedule_at" in c[1]]
+    assert update_calls, "Expected UPDATE with pending_reschedule_at"
+
+
+@pytest.mark.asyncio
+async def test_propose_reschedule_raises_if_not_found():
+    pool = FakePool(fetchrow_results=[None])
+    with pytest.raises(ValueError, match="не найден"):
+        await measurement_service.propose_reschedule(
+            pool, 999, new_date=None, new_time="10:00", timezone=TZ
+        )
+
+
+@pytest.mark.asyncio
+async def test_propose_reschedule_raises_on_conflict():
+    future = _future_date()
+    current_start = measurement_service.validate_time(future, "11:00", TZ)
+    conflicting_start = measurement_service.validate_time(future, "17:00", TZ)
+
+    pool = FakePool(
+        fetchrow_results=[
+            {
+                "id": 10,
+                "scheduled_time": current_start,
+                "duration_minutes": 45,
+                "client_chat_id": 99001,
+            },
+            # check_conflict returns a conflicting measurement
+            {
+                "id": 20,
+                "scheduled_time": conflicting_start,
+                "duration_minutes": 45,
+                "client_name": "Другой",
+                "status": "confirmed",
+            },
+        ]
+    )
+
+    with pytest.raises(ValueError, match="занято"):
+        await measurement_service.propose_reschedule(
+            pool, 10, new_date=future, new_time="17:00", timezone=TZ
+        )
+
+
+@pytest.mark.asyncio
+async def test_propose_reschedule_uses_current_date_when_none():
+    """When new_date is None, propose_reschedule uses the measurement's existing date."""
+    future = _future_date()
+    current_start = measurement_service.validate_time(future, "11:00", TZ)
+    proposed_start = measurement_service.validate_time(future, "17:00", TZ)
+
+    pool = FakePool(
+        fetchrow_results=[
+            {
+                "id": 10,
+                "scheduled_time": current_start,
+                "duration_minutes": 45,
+                "client_chat_id": 99001,
+            },
+            None,  # no conflict
+            {
+                "id": 10,
+                "scheduled_time": current_start,
+                "duration_minutes": 45,
+                "client_chat_id": 99001,
+                "pending_reschedule_at": proposed_start,
+                "pending_reschedule_reason": "",
+            },
+        ]
+    )
+
+    result = await measurement_service.propose_reschedule(
+        pool, 10, new_date=None, new_time="17:00", timezone=TZ
+    )
+    assert result["pending_reschedule_at"] == proposed_start
+
+
+# ─── clear_pending_reschedule ──────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_clear_pending_reschedule_nullifies_fields():
+    pool = FakePool()
+    await measurement_service.clear_pending_reschedule(pool, 10)
+    assert pool.calls
+    _kind, sql, args = pool.calls[0]
+    assert "pending_reschedule_at = NULL" in sql
+    assert args == (10,)
+
+
+# ─── update_measurement clears pending when time changes ──────────────────────
+
+@pytest.mark.asyncio
+async def test_update_measurement_clears_pending_on_time_change():
+    future = _future_date()
+    current_start = measurement_service.validate_time(future, "11:00", TZ)
+    new_start = measurement_service.validate_time(future, "17:00", TZ)
+
+    pool = FakePool(
+        fetchrow_results=[
+            # SELECT current row
+            {
+                "id": 5,
+                "scheduled_time": current_start,
+                "duration_minutes": 45,
+            },
+            # check_conflict: no conflict
+            None,
+            # UPDATE RETURNING *
+            {
+                "id": 5,
+                "scheduled_time": new_start,
+                "duration_minutes": 45,
+                "client_chat_id": 77,
+            },
+        ]
+    )
+
+    await measurement_service.update_measurement(
+        pool, 5, date=future, time="17:00", timezone=TZ
+    )
+
+    # Verify there was an execute call clearing pending fields
+    clear_calls = [
+        c for c in pool.calls
+        if c[0] == "execute" and "pending_reschedule_at = NULL" in c[1]
+    ]
+    assert clear_calls, "Expected pending reschedule fields to be cleared on time update"

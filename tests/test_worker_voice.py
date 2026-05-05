@@ -254,7 +254,7 @@ async def test_process_client_job_transcribes_voice_then_runs_llm(monkeypatch):
 
     captured = {}
 
-    def fake_build_prompt(text, client, state, history, available_slots=None, conversation_memory=None):
+    def fake_build_prompt(text, client, state, history, available_slots=None, conversation_memory=None, **kwargs):
         captured["prompt_text"] = text
         return "PROMPT"
 

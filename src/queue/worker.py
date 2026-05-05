@@ -77,6 +77,23 @@ async def _load_available_slots(pg_pool, days_ahead: int = 3) -> dict[str, list[
     return slots
 
 
+async def _load_pending_reschedule(pg_pool, chat_id: int) -> dict[str, Any] | None:
+    """Load pending reschedule info for a client, if any active measurement has a pending proposal."""
+    try:
+        from src.engine.measurement_service import get_active_measurement_for_chat
+        active_meas = await get_active_measurement_for_chat(pg_pool, chat_id)
+        if active_meas and active_meas.get("pending_reschedule_at"):
+            return {
+                "proposed_at": active_meas["pending_reschedule_at"],
+                "reason": active_meas.get("pending_reschedule_reason") or "",
+                "measurement_id": active_meas["id"],
+                "current_scheduled": active_meas["scheduled_time"],
+            }
+    except Exception as exc:
+        logger.warning("pending_reschedule_load_failed", extra={"chat_id": chat_id, "error": str(exc)})
+    return None
+
+
 async def _refresh_memory_best_effort(pg_pool, chat_id: int) -> None:
     try:
         await refresh_conversation_memory_if_needed(pg_pool, chat_id)
@@ -442,6 +459,9 @@ async def process_client_job(
         # Load available measurement slots for the next 3 days
         available_slots = await _load_available_slots(pg_pool)
 
+        # Check for pending master reschedule proposal
+        pending_info = await _load_pending_reschedule(pg_pool, job.chat_id)
+
         prompt = build_prompt(
             job.text,
             client,
@@ -449,6 +469,7 @@ async def process_client_job(
             history,
             available_slots=available_slots,
             conversation_memory=memory,
+            pending_reschedule_info=pending_info,
         )
         raw_llm = await call_llm(prompt)
         parsed = parse_actions(raw_llm)

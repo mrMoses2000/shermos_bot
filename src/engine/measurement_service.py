@@ -218,7 +218,8 @@ async def get_active_measurement_for_chat(pool, client_chat_id: int) -> dict | N
     row = await pool.fetchrow(
         """
         SELECT id, client_chat_id, scheduled_time, duration_minutes, address,
-               client_name, client_phone, status, order_request_id
+               client_name, client_phone, status, order_request_id,
+               pending_reschedule_at, pending_reschedule_reason
         FROM measurements
         WHERE client_chat_id = $1
           AND status IN ('scheduled', 'confirmed')
@@ -294,6 +295,12 @@ async def update_measurement(
     sql = f"UPDATE measurements SET {', '.join(fields)} WHERE id=${len(values)} RETURNING *"
     row = await pool.fetchrow(sql, *values)
     measurement = dict(row)
+    if date is not None and time is not None:
+        # Clear any pending proposal — the change is now applied
+        await pool.execute(
+            "UPDATE measurements SET pending_reschedule_at = NULL, pending_reschedule_reason = '' WHERE id = $1",
+            measurement_id,
+        )
     logger.info(
         "measurement_updated",
         extra={
@@ -476,6 +483,77 @@ async def get_due_reminders(pool, *, window_start_min: int = 55, window_end_min:
 async def mark_reminder_sent(pool, measurement_id: int) -> None:
     await pool.execute(
         "UPDATE measurements SET reminder_sent_at = now() WHERE id = $1",
+        measurement_id,
+    )
+
+
+async def propose_reschedule(
+    pool,
+    measurement_id: int,
+    *,
+    new_date: str | None,
+    new_time: str,
+    timezone: str = "UTC",
+    reason: str = "",
+) -> dict[str, Any]:
+    """Save a pending reschedule proposal on the measurement.
+
+    Does NOT change scheduled_time yet — only records pending_reschedule_at +
+    reason. Client confirms via update_measurement, which will clear these
+    fields.
+
+    Validates the new slot (15-min, working hours, conflict-excluding-self).
+    Raises ValueError on invalid time / conflict.
+    """
+    current = await pool.fetchrow(
+        "SELECT id, scheduled_time, duration_minutes, client_chat_id FROM measurements WHERE id=$1",
+        measurement_id,
+    )
+    if not current:
+        raise ValueError(f"Замер #{measurement_id} не найден")
+
+    # Resolve the date — if new_date is None, keep the current measurement date
+    if new_date is None:
+        tz = ZoneInfo(timezone)
+        new_date = current["scheduled_time"].astimezone(tz).strftime("%Y-%m-%d")
+
+    proposed_start = validate_time(new_date, new_time, timezone)
+    conflict = await check_conflict(
+        pool, proposed_start, current["duration_minutes"], exclude_id=measurement_id
+    )
+    if conflict:
+        tz = ZoneInfo(timezone)
+        conflict_time = conflict["scheduled_time"].astimezone(tz).strftime("%H:%M")
+        raise ValueError(
+            f"Предлагаемое время занято (замер в {conflict_time}). Выберите другое."
+        )
+
+    row = await pool.fetchrow(
+        """
+        UPDATE measurements
+        SET pending_reschedule_at = $1,
+            pending_reschedule_reason = $2,
+            updated_at = now()
+        WHERE id = $3
+        RETURNING *
+        """,
+        proposed_start,
+        reason or "",
+        measurement_id,
+    )
+    return dict(row)
+
+
+async def clear_pending_reschedule(pool, measurement_id: int) -> None:
+    """Called after client confirms or rejects — clears the pending fields."""
+    await pool.execute(
+        """
+        UPDATE measurements
+        SET pending_reschedule_at = NULL,
+            pending_reschedule_reason = '',
+            updated_at = now()
+        WHERE id = $1
+        """,
         measurement_id,
     )
 
