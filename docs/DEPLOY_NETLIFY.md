@@ -1,6 +1,8 @@
 # Frontend deploy на Netlify
 
-Фронтенд (Mini App + CMS) живёт на Netlify, backend (FastAPI + workers + БД) — на Ubuntu сервере. Между ними — кросс-доменные запросы через явный `VITE_API_BASE_URL`.
+CMS (фронт мастера) живёт на Netlify, backend (FastAPI + workers + БД) — на Ubuntu сервере. Между ними — кросс-доменные запросы через явный `VITE_API_BASE_URL`. Боты клиента и мастера общаются с пользователями через WhatsApp; CMS — это веб-интерфейс мастера для просмотра заказов, замеров, цен и т.д.
+
+> **Архитектура:** оба бота — только WhatsApp. Telegram отключён (Phase 10). Единственный браузерный фронт — CMS на Netlify; в нём же и точка входа.
 
 ## Текущая конфигурация
 
@@ -8,9 +10,7 @@
 |---|---|
 | Netlify site name | `shermos-mini-app-takoe` |
 | Netlify site ID | `121a8211-34a6-4f70-bc6e-a5fc4e261138` |
-| Production URL | https://shermos-mini-app-takoe.netlify.app |
-| CMS URL | https://shermos-mini-app-takoe.netlify.app/cms |
-| Mini App entry | https://shermos-mini-app-takoe.netlify.app/ |
+| Production URL (CMS) | https://shermos-mini-app-takoe.netlify.app |
 | Admin URL | https://app.netlify.com/projects/shermos-mini-app-takoe |
 | Текущий API backend | https://carb-investigation-drive-equations.trycloudflare.com (cloudflared trycloudflare, **временный**) |
 
@@ -60,13 +60,11 @@ MINI_APP_URL=https://shermos-mini-app-takoe.netlify.app/
 
 После любого изменения — рестарт `shermos-api` и `shermos-worker`.
 
-## Telegram BotFather
+## Доставка ссылки на CMS мастеру
 
-Mini App URL у бота настраивается в BotFather (это **ручное действие**, нет API):
-1. Открыть @BotFather в Telegram → `/mybots` → выбрать клиентский бот → **Bot Settings → Menu Button → Configure menu button**.
-2. URL: `https://shermos-mini-app-takoe.netlify.app/`.
-3. Текст кнопки: «Открыть Shermos» (или как нравится).
-4. Аналогично для менеджерского бота — URL: `https://shermos-mini-app-takoe.netlify.app/cms`.
+CMS — это веб-сайт. Мастер открывает его в обычном браузере (на телефоне или ноутбуке) по ссылке `https://shermos-mini-app-takoe.netlify.app/`. Можно отправить ему ссылку через WhatsApp (или закладку в браузере).
+
+Клиент в CMS не заходит — для клиента есть только WhatsApp-бот. CMS-логин по WhatsApp-OTP (введи свой номер → получишь код в WhatsApp → введи код → внутри).
 
 ## Локальная разработка
 

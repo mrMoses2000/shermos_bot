@@ -1340,6 +1340,106 @@ echo "Done. Restart with: sudo systemctl restart shermos-{worker,webhook,api,wa-
 - [ ] **Phase 7 done — watchdog активен в systemd, kill -STOP → авторестарт за 60 сек.**
 - [ ] **Phase 8 done — три xfail закрыты, integration 40/40 зелёных.**
 - [ ] **Phase 9 — опционально, по решению владельца.**
+- [ ] **Phase 10 done — Telegram-стек полностью удалён, оба бота работают только через WhatsApp.**
+
+---
+
+## Phase 10 — Decommission Telegram (только WhatsApp для обоих ботов)
+
+**Решение владельца (2026-05-05):** Telegram-бот не нужен ни для клиента, ни для менеджера. Оба канала — **только WhatsApp**. Mini App в Telegram-WebView не используется. CMS на Netlify остаётся как браузерный сайт.
+
+**Что остаётся жить:**
+- WhatsApp client bridge (`shermos-wa-client.service`).
+- WhatsApp manager bridge (`shermos-wa-manager.service`).
+- CMS на Netlify (https://shermos-mini-app-takoe.netlify.app/cms) — авторизация через WhatsApp-OTP (Phase 3), JWT-сессии.
+- Backend FastAPI с `/api/whatsapp/inbound`, `/api/health/*`, `/api/auth/*`, и доменными эндпоинтами для CMS.
+- Worker для обработки очередей `queue:incoming` и `queue:manager`.
+
+**Что выпиливаем:**
+- `shermos-webhook.service` — обслуживал только Telegram webhook'и.
+- `src/bot/webhook.py` — удалить.
+- `src/bot/telegram_sender.py` — удалить (или оставить как dead-code? предпочту удалить).
+- `run_webhook.py` — удалить.
+- Telegram-специфичные ENV: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `MANAGER_BOT_TOKEN`, `MANAGER_WEBHOOK_SECRET`, `MANAGER_CHAT_IDS`. Удалить из `.env` на сервере и из `docs/ENV_REFERENCE.md`.
+- Telegram initData auth в `src/api/auth.py:require_auth` — fallback на `X-Telegram-Init-Data` убирается; остаётся JWT и `X-CMS-Admin-Token`.
+- В CMS (`mini-app/src/auth.ts`) — функция `detectAuthMode()` всегда возвращает `"cms"`; код для Telegram WebApp удаляется. `index.html` (Telegram Mini App entry) удаляется. Vite multi-entry build → single entry `cms.html` либо переименовать в `index.html`.
+- `process_manager_job` в `src/queue/worker.py` — содержит ветки про Telegram callback_data (`meas_confirm:N`, `meas_reject:N`, `meas_call:N`). Эти команды **сохраняем** — менеджер шлёт их текстом в WhatsApp (нативные buttons WhatsApp из Phase 1.5.4 кладут эти строки в текст: «👉 Подтвердить: /meas_confirm:42»). Маршрут уже работает.
+- В `src/llm/actions_applier.py` — выпилить отправку Telegram-уведомлений менеджерам (`for manager_chat_id in settings.manager_chat_ids_list`) и связанные outbox-инсерты с `channel="telegram"`. Оставить только `channel="whatsapp"`.
+- `tests/test_webhook.py`, `tests/test_telegram_sender.py`, `tests/test_e2e_telegram_flow.py` — удалить.
+- Тесты, которые используют `manager_chat_ids` для проверки Telegram-маршрутов — переписать на whatsapp-only (или удалить если избыточны).
+- В клиентских кейсах (Phase 4.4): C-01 (Telegram /start), C-11 (manager confirm в Telegram), C-16 (Telegram dedup), C-23 (Mini App initData) — удалить или преобразовать в WhatsApp-варианты.
+
+### 10.1 Удалить серверные сущности
+
+**agent prompt:**
+> 1. На сервере (через ssh): `sudo systemctl disable --now shermos-webhook` → сервис больше не запускается.
+> 2. Удалить unit-файл: `sudo rm /etc/systemd/system/shermos-webhook.service && sudo systemctl daemon-reload`.
+> 3. В `.env` удалить строки: `TELEGRAM_BOT_TOKEN=`, `TELEGRAM_WEBHOOK_SECRET=`, `MANAGER_BOT_TOKEN=`, `MANAGER_WEBHOOK_SECRET=`, `MANAGER_CHAT_IDS=`.
+> 4. На бот-стороне Telegram (BotFather) — оставить как есть (отзывать токены не обязательно — они без ENV у нас не делают ничего, но если хочешь чистоту: `/deletebot` или revoke token у обоих ботов).
+
+**Verify:**
+- `ssh aws-shermos1-frankfurt 'systemctl status shermos-webhook'` → not loaded / not active.
+- `journalctl -u shermos-worker --since "5 min ago" | grep -E "no_manager_channels_configured|telegram"` → видим warning «menager_chat_ids пусто», игнорируем (после подтверждения, что WhatsApp-уведомления работают).
+
+### 10.2 Удалить код (один большой коммит)
+
+**Файлы на удаление:**
+- `src/bot/webhook.py`
+- `src/bot/telegram_sender.py`
+- `run_webhook.py`
+- `tests/test_webhook.py`
+- `tests/test_telegram_sender.py`
+- `tests/test_e2e_telegram_flow.py`
+
+**Файлы на правку:**
+- `src/api/auth.py`: `require_auth` без telegram-fallback.
+- `src/llm/actions_applier.py`: убрать telegram-блок отправки менеджерам.
+- `src/queue/outbox_dispatcher.py`: убрать ветку `channel='telegram'` (или оставить как мёртвую если решим что вдруг полезно — нет, удаляем).
+- `src/queue/worker.py`: 
+  - Удалить `manager_chat_id`-логику нотификаций.
+  - Telegram-callback-обработчики (callback_query) удалить.
+  - process_manager_job: оставить логику команд (`/orders`, `/meas_confirm:N` etc.) — она работает для WhatsApp manager-message текстов.
+- `src/config.py`: удалить `telegram_bot_token`, `telegram_webhook_secret`, `manager_bot_token`, `manager_webhook_secret`, `manager_chat_ids`.
+- `src/models.py`: возможно полезно убрать `Job.bot_type` если он использовался только для Telegram-различения; оставить, потому что определяет client-vs-manager очередь.
+- `src/bot/whatsapp_ingress.py`: проверить что нет упоминаний telegram-token-token (его там и не должно быть).
+- `tests/conftest.py`: удалить `os.environ.setdefault("TELEGRAM_BOT_TOKEN", ...)` строки.
+- `tests/test_e2e_client_cases.py`: удалить C-01, C-11, C-16, C-23. Адаптировать остальные.
+- `mini-app/src/auth.ts`: `detectAuthMode` всегда `"cms"`. Удалить ветку Telegram WebApp.
+- `mini-app/index.html`: удалить (Telegram Mini App entry больше не нужен).
+- `mini-app/src/main.tsx`, `mini-app/src/App.tsx`: удалить (если они были Telegram-mode только) или преобразовать.
+- `mini-app/vite.config.ts`: убрать `mini` entry, оставить только `cms`. ИЛИ переименовать `cms.html` в `index.html` чтобы Netlify SPA работал на корне.
+- `netlify.toml`: убрать `/cms` redirects — теперь сайт сам по себе CMS.
+- `docs/CMS_DEPLOY.md`, `docs/DEPLOY_NETLIFY.md`: удалить упоминания Telegram BotFather, Mini App в Telegram, X-Telegram-Init-Data header.
+
+**agent prompt:**
+> Сделать в одной ветке `chore/decommission-telegram-2026-05-NN`. Удалить файлы перечисленные выше; править оставшиеся. Прогнать `pytest -q` — должно остаться около 270-280 тестов (минус удалённые ~25-30). На сервере после deploy: `journalctl -u shermos-worker -n 100` — нет ошибок import, worker нормально стартует, `worker_startup_config` логирует только manager_whatsapp_numbers.
+
+### 10.3 Frontend — single CMS site
+
+**agent prompt:**
+> 1. Удалить `mini-app/index.html`, `mini-app/src/main.tsx`, `mini-app/src/App.tsx` (Telegram Mini App).
+> 2. Переименовать `mini-app/cms.html` → `mini-app/index.html` (теперь это корень).
+> 3. В `vite.config.ts` убрать multi-entry: `build.rollupOptions.input` с одним `cms` или просто оставить дефолт (Vite сам найдёт `index.html`).
+> 4. В `netlify.toml` убрать `/cms` redirects, оставить только SPA-fallback на `/index.html`.
+> 5. `npm run build` → `dist/index.html` есть. Никакого `cms.html`.
+> 6. Передеплой через `netlify deploy --prod`. URL `https://shermos-mini-app-takoe.netlify.app/` теперь сразу = CMS-логин.
+
+### 10.4 Адаптировать клиентские кейсы
+
+**Удалить:** C-01 (`/start` Telegram), C-11 (manager Telegram callback), C-16 (Telegram dedup), C-23 (Mini App initData).
+
+**Заменить:** C-01-WA: `/start` через WhatsApp от нового номера → приветствие.
+
+### 10.5 Документация
+
+`docs/DEPLOY_NETLIFY.md`, `DEPLOY.md`, `docs/WHATSAPP_DUAL_BOT.md`, `REMEDIATION_PLAN.md` — обновить, убрав упоминания Telegram. CMS — единственный фронт, доступен через Netlify URL. Авторизация — через WhatsApp-OTP в любом случае.
+
+**Gate Phase 10:**
+- `shermos-webhook.service` отключён.
+- В коде нет ни одного `import telegram_sender` или `import webhook`.
+- `pytest -q` зелёный.
+- На WhatsApp клиенту: «/start» от нового номера → приветствие. Менеджеру: создание замера → уведомление в WhatsApp. Менеджер: `/meas_confirm:N` через WhatsApp → статус confirmed.
+- CMS на Netlify-URL открывается, OTP логин работает.
 
 ## Порядок исполнения
 
