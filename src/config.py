@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     transcription_timeout_seconds: int = 180
 
     gemini_health_check_seconds: int = 1800
+    memory_summary_max_chars: int = 900
 
     log_level: str = "INFO"
     log_format: str = "json"

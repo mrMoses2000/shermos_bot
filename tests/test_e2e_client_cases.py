@@ -991,18 +991,18 @@ async def test_C25_otp_brute_force_blocked(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="Current memory summarization is byte-based truncation without semantic preservation. "
-           "Early facts (height, width) may be dropped when summary exceeds MAX_SUMMARY_CHARS. "
-           "TODO: implement semantic fact extraction in Phase 5."
-)
 async def test_C26_long_dialog_memory_keeps_key_params(
     pg_pool_integration,
     redis_client_integration,
     reset_integration_db,
+    monkeypatch,
 ):
-    """After 100 messages, key dimension facts from early messages must survive in memory."""
-    from src.llm.conversation_memory import refresh_conversation_memory_if_needed
+    """After 100 messages, key dimension facts from early messages must survive in memory.
+
+    Uses a mocked call_llm that returns a compressed summary containing the key
+    facts so no actual LLM call is made.
+    """
+    from src.llm import conversation_memory as mem_mod
 
     CHAT_ID = 110026
 
@@ -1018,7 +1018,17 @@ async def test_C26_long_dialog_memory_keeps_key_params(
         role = "user" if i % 2 == 0 else "assistant"
         await postgres.insert_chat_message(pg_pool_integration, CHAT_ID, role, f"Дополнительное сообщение {i}")
 
-    await refresh_conversation_memory_if_needed(pg_pool_integration, CHAT_ID)
+    # Mock the LLM to return a compressed summary that preserves the key facts
+    async def fake_call_llm(_prompt: str) -> str:
+        return "Клиент указал: ширина 3.5 м, высота 2.7 м. [сжато]"
+
+    monkeypatch.setattr(mem_mod, "_call_llm_for_compression", fake_call_llm, raising=False)
+
+    # Patch call_llm inside conversation_memory's refresh function
+    import src.llm.executor as executor_mod
+    monkeypatch.setattr(executor_mod, "call_llm", fake_call_llm)
+
+    await mem_mod.refresh_conversation_memory_if_needed(pg_pool_integration, CHAT_ID)
 
     memory = await postgres.get_conversation_memory(pg_pool_integration, CHAT_ID)
     assert memory is not None, "Memory must be created after refresh"

@@ -1,6 +1,7 @@
 import pytest
 
 from src.llm import conversation_memory
+from src.llm.conversation_memory import merge_memory_summary_async
 
 
 def test_build_memory_facts_prefers_structured_state_and_order():
@@ -91,3 +92,67 @@ async def test_refresh_conversation_memory_summarizes_old_messages(monkeypatch):
     assert calls[0][2]["shape"] == "Прямая"
     assert "message 1" in calls[0][1]
     assert "message 7" not in calls[0][1]
+
+
+# ---------------------------------------------------------------------------
+# merge_memory_summary_async — LLM compression tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_merge_memory_summary_async_no_truncation_skips_llm():
+    """Short summary under MAX_SUMMARY_CHARS: LLM must NOT be called."""
+    llm_calls = []
+
+    async def fake_llm(prompt):
+        llm_calls.append(prompt)
+        return "compressed"
+
+    messages = [{"id": 1, "role": "user", "text": "hello"}]
+    summary, last_id = await merge_memory_summary_async("short", messages, call_llm_fn=fake_llm)
+
+    assert last_id == 1
+    assert "short" in summary
+    assert "hello" in summary
+    assert llm_calls == [], "LLM must not be called when summary fits within limit"
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_summary_uses_llm_when_oversized(monkeypatch):
+    """When the summary exceeds MAX_SUMMARY_CHARS, LLM is called and its result used."""
+    monkeypatch.setattr(conversation_memory, "MAX_SUMMARY_CHARS", 50)
+
+    llm_calls = []
+    LLM_RETURN = "краткий контекст: ширина 3.5, высота 2.7"
+
+    async def fake_llm(prompt):
+        llm_calls.append(prompt)
+        return LLM_RETURN
+
+    # Build messages that will exceed 50 chars when combined with existing summary
+    messages = [{"id": 5, "role": "user", "text": "A" * 40}]
+    existing = "B" * 20
+
+    summary, last_id = await merge_memory_summary_async(existing, messages, call_llm_fn=fake_llm)
+
+    assert last_id == 5
+    assert len(llm_calls) == 1, "LLM must be called when summary is oversized"
+    assert summary == LLM_RETURN, "Result should be the LLM's return value"
+
+
+@pytest.mark.asyncio
+async def test_merge_memory_summary_falls_back_on_llm_error(monkeypatch):
+    """When LLM raises, byte-truncation fallback is used with [older context truncated] prefix."""
+    monkeypatch.setattr(conversation_memory, "MAX_SUMMARY_CHARS", 50)
+
+    async def failing_llm(prompt):
+        raise RuntimeError("LLM unavailable")
+
+    messages = [{"id": 7, "role": "user", "text": "D" * 40}]
+    existing = "C" * 20
+
+    summary, last_id = await merge_memory_summary_async(existing, messages, call_llm_fn=failing_llm)
+
+    assert last_id == 7
+    assert "[older context truncated]" in summary, (
+        "Fallback truncation must include the [older context truncated] marker"
+    )
