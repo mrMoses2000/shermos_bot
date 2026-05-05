@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import signal
 import ssl
 
 from aiohttp import web
@@ -12,6 +13,9 @@ from src.bot.webhook import setup_routes
 from src.config import settings
 from src.db import postgres
 from src.db.redis_client import RedisClient
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 async def _app_context(app: web.Application):
@@ -54,7 +58,29 @@ async def main() -> None:
         ssl_context=_ssl_context(),
     )
     await site.start()
-    await asyncio.Event().wait()
+    logger.info(
+        "webhook_server_started",
+        extra={"host": settings.webhook_host, "port": settings.webhook_port},
+    )
+
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    def _on_signal(sig_name: str) -> None:
+        logger.info("webhook_shutdown_initiated", extra={"signal": sig_name})
+        stop_event.set()
+
+    for sig_name in ("SIGTERM", "SIGINT"):
+        sig = getattr(signal, sig_name)
+        try:
+            loop.add_signal_handler(sig, _on_signal, sig_name)
+        except NotImplementedError:
+            # Windows doesn't support SIGTERM via add_signal_handler
+            pass
+
+    await stop_event.wait()
+    logger.info("webhook_shutdown_complete")
+    await runner.cleanup()
 
 
 if __name__ == "__main__":
