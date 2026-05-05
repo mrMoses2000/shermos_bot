@@ -334,17 +334,20 @@ def parse_slot_proposal(text: str, timezone: str, now: datetime | None = None) -
         date_value = base.date()
     else:
         iso_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", lowered)
-        dot_match = re.search(r"\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b", lowered)
+        dot_match = re.search(r"\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b", lowered)
         if iso_match:
             date_value = datetime.strptime(iso_match.group(1), "%Y-%m-%d").date()
         elif dot_match:
             day = int(dot_match.group(1))
             month = int(dot_match.group(2))
             year_raw = dot_match.group(3)
-            year = base.year if not year_raw else int(year_raw)
+            year = int(year_raw)
             if year < 100:
                 year += 2000
-            date_value = datetime(year, month, day, tzinfo=tz).date()
+            try:
+                date_value = datetime(year, month, day, tzinfo=tz).date()
+            except ValueError:
+                return None
         else:
             return None
     return date_value.strftime("%Y-%m-%d"), f"{hour:02d}:{minute:02d}"

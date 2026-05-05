@@ -308,4 +308,38 @@ def test_parse_slot_proposal_understands_manager_text():
     base = datetime(2026, 4, 16, 10, 0, tzinfo=ZoneInfo(TZ))
 
     assert measurement_service.parse_slot_proposal("завтра на 11:00", TZ, now=base) == ("2026-04-17", "11:00")
-    assert measurement_service.parse_slot_proposal("20.04 15:30", TZ, now=base) == ("2026-04-20", "15:30")
+    assert measurement_service.parse_slot_proposal("20.04 15:30", TZ, now=base) is None  # year required now
+
+
+def test_parse_slot_proposal_ignores_price_like_dots():
+    """2.1 — dot-format without year must not crash on prices like '2.50 м' or '1500.50'."""
+    tz = TZ
+    base = datetime(2026, 4, 16, 10, 0, tzinfo=ZoneInfo(tz))
+    assert measurement_service.parse_slot_proposal("замер 2.50 м ширина", tz, now=base) is None
+    assert measurement_service.parse_slot_proposal("бюджет 1500.50 руб", tz, now=base) is None
+
+
+def test_parse_slot_proposal_valid_full_date():
+    """2.1 — full dot-format date with year still parses correctly."""
+    base = datetime(2026, 4, 16, 10, 0, tzinfo=ZoneInfo(TZ))
+    assert measurement_service.parse_slot_proposal("приду 13.05.2026 в 14:00", TZ, now=base) == ("2026-05-13", "14:00")
+
+
+def test_parse_slot_proposal_invalid_month_swallowed():
+    """2.1 — 13.13.2026 has invalid month, exception must be swallowed → None."""
+    base = datetime(2026, 4, 16, 10, 0, tzinfo=ZoneInfo(TZ))
+    assert measurement_service.parse_slot_proposal("13.13.2026 в 11:00", TZ, now=base) is None
+
+
+def test_parse_slot_proposal_invalid_day_swallowed():
+    """2.1 — 31.02.2026 has invalid day for February, exception must be swallowed → None."""
+    base = datetime(2026, 4, 16, 10, 0, tzinfo=ZoneInfo(TZ))
+    assert measurement_service.parse_slot_proposal("31.02.2026 в 11:00", TZ, now=base) is None
+
+
+def test_parse_slot_proposal_relative_keywords_still_work():
+    """2.1 — existing relative-keyword tests must still pass."""
+    base = datetime(2026, 4, 16, 10, 0, tzinfo=ZoneInfo(TZ))
+    assert measurement_service.parse_slot_proposal("завтра на 11:00", TZ, now=base) == ("2026-04-17", "11:00")
+    assert measurement_service.parse_slot_proposal("сегодня в 15:30", TZ, now=base) == ("2026-04-16", "15:30")
+    assert measurement_service.parse_slot_proposal("послезавтра 10:00", TZ, now=base) == ("2026-04-18", "10:00")
