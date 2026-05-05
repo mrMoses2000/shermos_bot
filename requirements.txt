@@ -16,6 +16,6 @@ pytest-cov==7.0.0
 redis==7.1.0
 trimesh==4.9.0
 uvicorn==0.38.0
-# systemd integration (production only — sd_notify watchdog; Linux only)
-# On macOS the import guard in src/utils/watchdog.py keeps it a no-op.
+# systemd integration (production only — sd_notify watchdog)
+# Install on server with: apt install libsystemd-dev && pip install systemd-python>=235
 # systemd-python>=235
