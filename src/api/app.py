@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from src.api import (
     routes_analytics,
@@ -21,6 +22,7 @@ from src.api import (
 )
 from src.config import settings
 from src.db import postgres
+from src.utils.metrics import render_metrics
 
 
 @asynccontextmanager
@@ -70,6 +72,11 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {"ok": True, "service": "shermos-mini-api"}
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        body, content_type = render_metrics()
+        return Response(content=body, media_type=content_type)
 
     return app
 

@@ -10,6 +10,7 @@ from src.bot.whatsapp_sender import manager_whatsapp_sender, whatsapp_sender
 from src.config import settings
 from src.db import postgres
 from src.utils.logger import setup_logger
+from src.utils.metrics import outbound_events_total
 
 logger = setup_logger(__name__)
 
@@ -63,12 +64,15 @@ async def dispatch_once(pg_pool, sender: TelegramSender = telegram_sender) -> in
                     reply_markup=event.get("reply_markup"),
                 )
                 await postgres.mark_outbound_sent(pg_pool, int(event["id"]), telegram_message_id=msg_id)
+            outbound_events_total.labels(channel=channel, status="sent").inc()
             sent += 1
         except PermanentSendError as exc:
             await postgres.mark_outbound_dead(pg_pool, int(event["id"]), str(exc))
+            outbound_events_total.labels(channel=channel, status="dead").inc()
             logger.info("outbox_send_permanent_fail", extra={"event_id": event.get("id"), "error": str(exc)})
         except Exception as exc:
             await postgres.mark_outbound_failed(pg_pool, int(event["id"]), str(exc))
+            outbound_events_total.labels(channel=channel, status="failed").inc()
             logger.warning("outbox_send_failed", extra={"event_id": event.get("id"), "error": str(exc)})
     return sent
 

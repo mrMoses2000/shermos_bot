@@ -12,6 +12,7 @@ from pathlib import Path
 
 from src.config import settings
 from src.utils.logger import setup_logger
+from src.utils.metrics import llm_call_duration_seconds
 
 logger = setup_logger(__name__)
 _semaphore: asyncio.Semaphore | None = None
@@ -120,6 +121,8 @@ async def call_llm(prompt: str) -> str:
                 except ProcessLookupError:
                     pass
             await _terminate_process(process)
+            duration = time.perf_counter() - exec_start
+            llm_call_duration_seconds.labels(status="timeout").observe(duration)
             raise TimeoutError("Gemini CLI timed out") from exc
 
         duration = time.perf_counter() - exec_start
@@ -128,8 +131,10 @@ async def call_llm(prompt: str) -> str:
             extra={"t_wait_llm": round(waited, 3), "t_exec_llm": round(duration, 3)},
         )
         if process.returncode != 0:
+            llm_call_duration_seconds.labels(status="error").observe(duration)
             raise RuntimeError(
                 f"Gemini CLI failed with code {process.returncode}: "
                 f"{stderr.decode('utf-8', errors='ignore')}"
             )
+        llm_call_duration_seconds.labels(status="success").observe(duration)
         return _clean_output(stdout.decode("utf-8", errors="ignore"))

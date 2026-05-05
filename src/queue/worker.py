@@ -26,6 +26,7 @@ from src.llm.prompt_builder import build_prompt
 from src.models import Job
 from src.queue.outbox_dispatcher import run_outbox_dispatcher
 from src.utils.logger import setup_logger
+from src.utils.metrics import worker_jobs_in_flight
 
 logger = setup_logger(__name__)
 
@@ -402,6 +403,7 @@ async def process_client_job(
         await _schedule_locked_client_job(redis_client, job)
         return
 
+    worker_jobs_in_flight.labels(queue="client").inc()
     try:
         existing_status = await postgres.get_update_status(pg_pool, job.update_id)
         if existing_status in ("completed", "failed"):
@@ -495,6 +497,7 @@ async def process_client_job(
         finally:
             await postgres.mark_update_status(pg_pool, job.update_id, "failed", str(exc))
     finally:
+        worker_jobs_in_flight.labels(queue="client").dec()
         await redis_client.release_user_lock(job.chat_id)
 
 
@@ -728,6 +731,7 @@ async def process_manager_job(
     if job.channel == "whatsapp":
         sender = manager_whatsapp_sender
 
+    worker_jobs_in_flight.labels(queue="manager").inc()
     try:
         existing_status = await postgres.get_update_status(pg_pool, job.update_id)
         if existing_status in ("completed", "failed"):
@@ -807,6 +811,8 @@ async def process_manager_job(
     except Exception as exc:
         logger.exception("manager_job_failed", extra={"update_id": job.update_id, "error": str(exc)})
         await postgres.mark_update_status(pg_pool, job.update_id, "failed", str(exc))
+    finally:
+        worker_jobs_in_flight.labels(queue="manager").dec()
 
 
 async def _client_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
