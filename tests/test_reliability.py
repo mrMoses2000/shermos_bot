@@ -213,26 +213,27 @@ async def test_gemini_health_check_failure_sets_flag(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_outbox_skips_already_sent(monkeypatch):
+async def test_outbox_skips_already_sent_whatsapp(monkeypatch):
+    """WhatsApp events with external_message_id already set are skipped (marked sent)."""
     calls = []
 
     async def fake_get_pending(_pool, limit=20):
-        return [{"id": 7, "chat_id": 10, "telegram_message_id": 99, "bot_type": "client"}]
+        return [{"id": 7, "chat_id": 10, "channel": "whatsapp", "external_message_id": "wa-99", "bot_type": "client"}]
 
-    async def fake_mark_sent(_pool, event_id, telegram_message_id=None):
-        calls.append(("sent", event_id, telegram_message_id))
+    async def fake_mark_sent(_pool, event_id, telegram_message_id=None, external_message_id=None):
+        calls.append(("sent", event_id, external_message_id))
 
-    class Sender:
+    class _WASender:
         async def send_message(self, *_args, **_kwargs):
             calls.append(("send",))
 
     monkeypatch.setattr(outbox_dispatcher.postgres, "get_pending_outbound", fake_get_pending)
     monkeypatch.setattr(outbox_dispatcher.postgres, "mark_outbound_sent", fake_mark_sent)
 
-    sent = await outbox_dispatcher.dispatch_once(object(), Sender())
+    sent = await outbox_dispatcher.dispatch_once(object())
 
     assert sent == 0
-    assert calls == [("sent", 7, 99)]
+    assert calls == [("sent", 7, "wa-99")]
 
 
 @pytest.mark.asyncio

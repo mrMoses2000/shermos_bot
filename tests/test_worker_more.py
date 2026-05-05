@@ -323,7 +323,7 @@ async def test_process_client_job_timeout_keeps_user_message_in_history(monkeypa
 
 @pytest.mark.asyncio
 async def test_auto_confirm_whatsapp_client_uses_whatsapp_sender(monkeypatch):
-    """Client confirmation still uses send_and_record (direct); manager goes via outbox."""
+    """Client confirmation still uses send_and_record (direct); manager goes via WhatsApp outbox."""
     client_calls = []
     outbox_rows = []
 
@@ -333,7 +333,7 @@ async def test_auto_confirm_whatsapp_client_uses_whatsapp_sender(monkeypatch):
     async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type, reply_markup=None):
         client_calls.append((active_sender.__class__.__name__, chat_id))
 
-    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="whatsapp", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
         outbox_rows.append({"channel": channel, "chat_id": chat_id, "bot_type": bot_type, "external_chat_id": external_chat_id})
         return len(outbox_rows)
 
@@ -343,10 +343,7 @@ async def test_auto_confirm_whatsapp_client_uses_whatsapp_sender(monkeypatch):
 
     import types
     fake_settings = types.SimpleNamespace(
-        telegram_bot_token="token",
-        manager_bot_token="manager_token",
-        manager_chat_ids_list=[100],
-        manager_whatsapp_numbers_list=[]
+        manager_whatsapp_numbers_list=["77001000100"]
     )
     monkeypatch.setattr(worker, "settings", fake_settings)
 
@@ -356,12 +353,12 @@ async def test_auto_confirm_whatsapp_client_uses_whatsapp_sender(monkeypatch):
 
     # Client notification goes via send_and_record (WhatsApp channel)
     assert ("WhatsAppSender", "phone@s.whatsapp.net") in client_calls
-    # Manager notification goes via outbox
-    assert any(r["channel"] == "telegram" and r["chat_id"] == 100 and r["bot_type"] == "manager" for r in outbox_rows)
+    # Manager notification goes via WhatsApp outbox
+    assert any(r["channel"] == "whatsapp" and r["bot_type"] == "manager" for r in outbox_rows)
 
 @pytest.mark.asyncio
 async def test_auto_confirm_client_failure_does_not_block_manager_notifications(monkeypatch):
-    """If client send_and_record fails, manager outbox inserts should still succeed."""
+    """If client send_and_record fails, manager WhatsApp outbox inserts should still succeed."""
     client_calls = []
     outbox_rows = []
 
@@ -371,9 +368,9 @@ async def test_auto_confirm_client_failure_does_not_block_manager_notifications(
     async def fake_send_and_record(pg_pool, active_sender, token, chat_id, text, bot_type, reply_markup=None):
         client_calls.append((active_sender.__class__.__name__, chat_id))
         if chat_id == 10:
-            raise Exception("Telegram sending failed")
+            raise Exception("WhatsApp sending failed")
 
-    async def fake_insert_outbound_event(_pool, *, chat_id, channel="telegram", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
+    async def fake_insert_outbound_event(_pool, *, chat_id, channel="whatsapp", reply_text="", reply_markup=None, bot_type="client", inbound_event_id=None, external_chat_id=None, idempotency_key=None):
         outbox_rows.append({"channel": channel, "chat_id": chat_id, "bot_type": bot_type})
         return len(outbox_rows)
 
@@ -383,10 +380,7 @@ async def test_auto_confirm_client_failure_does_not_block_manager_notifications(
 
     import types
     fake_settings = types.SimpleNamespace(
-        telegram_bot_token="token",
-        manager_bot_token="manager_token",
-        manager_chat_ids_list=[100],
-        manager_whatsapp_numbers_list=[]
+        manager_whatsapp_numbers_list=["77001000200"]
     )
     monkeypatch.setattr(worker, "settings", fake_settings)
 
@@ -397,7 +391,7 @@ async def test_auto_confirm_client_failure_does_not_block_manager_notifications(
     # Client call attempted (failed)
     assert ("FakeSender", 10) in client_calls
     # Manager notification still inserted into outbox despite client failure
-    assert any(r["chat_id"] == 100 and r["bot_type"] == "manager" for r in outbox_rows)
+    assert any(r["bot_type"] == "manager" for r in outbox_rows)
 
 @pytest.mark.asyncio
 async def test_manager_whatsapp_notifications_still_use_manager_allowlist_number(monkeypatch):
@@ -420,9 +414,6 @@ async def test_manager_whatsapp_notifications_still_use_manager_allowlist_number
 
     import types
     fake_settings = types.SimpleNamespace(
-        telegram_bot_token="token",
-        manager_bot_token="manager_token",
-        manager_chat_ids_list=[],
         manager_whatsapp_numbers_list=["77085766841"]
     )
     monkeypatch.setattr(worker, "settings", fake_settings)

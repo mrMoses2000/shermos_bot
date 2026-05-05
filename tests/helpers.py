@@ -4,11 +4,12 @@ import time
 from urllib.parse import urlencode
 
 
-from src.config import settings
+_DEFAULT_TEST_BOT_TOKEN = "manager-token"
+
 
 def signed_init_data(bot_token: str | None = None, **extra: str) -> str:
     if bot_token is None:
-        bot_token = settings.manager_bot_token
+        bot_token = _DEFAULT_TEST_BOT_TOKEN
     payload = {"auth_date": str(int(time.time())), "query_id": "test-query", **extra}
     data_check_string = "\n".join(f"{key}={payload[key]}" for key in sorted(payload))
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()

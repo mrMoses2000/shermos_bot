@@ -106,7 +106,7 @@ async def test_apply_actions_render_creates_order_and_notifies_manager(monkeypat
     monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     monkeypatch.setattr(actions_applier, "uuid4", lambda: "request-1")
 
-    settings = SimpleNamespace(manager_chat_ids_list=[99], manager_bot_token="manager")
+    settings = SimpleNamespace(manager_whatsapp_numbers_list=["77001000100"])
     actions = ActionsJson(
         reply_text="ok",
         actions={
@@ -288,7 +288,7 @@ async def test_render_reuse_rejects_stale_rendered_order_when_params_changed(mon
     monkeypatch.setattr(actions_applier.pricing_cache, "reload", fake_reload)
     monkeypatch.setattr(actions_applier, "calculate_price", fake_calculate_price)
     monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
-    settings = SimpleNamespace(manager_chat_ids_list=[], manager_bot_token="manager", manager_whatsapp_numbers_list=[])
+    settings = SimpleNamespace(manager_whatsapp_numbers_list=[])
 
     actions = ActionsJson(
         reply_text="ok",
@@ -408,9 +408,7 @@ async def test_apply_actions_schedule_measurement(monkeypatch):
     monkeypatch.setattr(actions_applier.postgres, "get_rendered_order_draft", fake_get_rendered_draft)
     monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     settings = SimpleNamespace(
-        manager_chat_ids_list=[99],
-        manager_bot_token="manager",
-        telegram_bot_token="client",
+        manager_whatsapp_numbers_list=["77001000100"],
         timezone="Asia/Bishkek",
     )
     actions = ActionsJson(
@@ -518,7 +516,7 @@ async def test_apply_actions_schedule_measurement_links_existing_rendered_order(
     monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", fake_upsert_state)
     monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", fake_upsert_draft)
     monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
-    settings = SimpleNamespace(manager_chat_ids_list=[99], manager_bot_token="manager", timezone="Asia/Bishkek")
+    settings = SimpleNamespace(manager_whatsapp_numbers_list=["77001000100"], timezone="Asia/Bishkek")
     actions = ActionsJson(
         reply_text="ok",
         actions={
@@ -611,8 +609,7 @@ async def test_apply_actions_suppresses_render_during_measurement_flow(monkeypat
     monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", fake_upsert_draft)
     monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
     settings = SimpleNamespace(
-        manager_chat_ids_list=[99],
-        manager_bot_token="manager",
+        manager_whatsapp_numbers_list=[],
         timezone="Asia/Bishkek",
     )
     actions = ActionsJson(
@@ -678,7 +675,7 @@ async def test_apply_actions_blocks_measurement_without_explicit_schedule_state(
     monkeypatch.setattr(actions_applier.postgres, "update_client", fake_update_client)
     monkeypatch.setattr(actions_applier.postgres, "get_rendered_order_draft", fake_get_rendered_draft)
 
-    settings = SimpleNamespace(manager_chat_ids_list=[99], manager_bot_token="manager", timezone="Asia/Bishkek")
+    settings = SimpleNamespace(manager_whatsapp_numbers_list=[], timezone="Asia/Bishkek")
     actions = ActionsJson(
         reply_text="ok",
         actions={
@@ -802,7 +799,7 @@ async def test_apply_actions_blocks_hallucinated_measurement_during_materials(mo
 
 @pytest.mark.asyncio
 async def test_schedule_measurement_routes_outbox_per_channel(monkeypatch):
-    """Telegram manager → channel='telegram'; WhatsApp manager → channel='whatsapp' with external_chat_id."""
+    """WhatsApp manager → channel='whatsapp' with external_chat_id."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -853,9 +850,6 @@ async def test_schedule_measurement_routes_outbox_per_channel(monkeypatch):
     monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", fake_insert_outbound_event)
 
     settings = SimpleNamespace(
-        manager_chat_ids_list=[99],
-        manager_bot_token="manager",
-        telegram_bot_token="client",
         manager_whatsapp_numbers_list=["77001234567"],
         timezone="Asia/Bishkek",
     )
@@ -887,12 +881,7 @@ async def test_schedule_measurement_routes_outbox_per_channel(monkeypatch):
     result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), settings)
 
     assert result["measurement"]["id"] == 42
-    assert len(outbox_rows) == 2
-
-    tg_row = next(r for r in outbox_rows if r["channel"] == "telegram")
-    assert tg_row["chat_id"] == 99
-    assert tg_row["bot_type"] == "manager"
-    assert tg_row["external_chat_id"] is None
+    assert len(outbox_rows) == 1
 
     wa_row = next(r for r in outbox_rows if r["channel"] == "whatsapp")
     assert wa_row["chat_id"] == int("77001234567")
@@ -903,7 +892,7 @@ async def test_schedule_measurement_routes_outbox_per_channel(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_render_partition_routes_outbox_per_channel(monkeypatch):
-    """new_order: Telegram manager → channel='telegram'; WhatsApp manager → channel='whatsapp'."""
+    """new_order: WhatsApp manager → channel='whatsapp'."""
     outbox_rows = []
 
     async def fake_render_partition(params, request_id, settings):
@@ -953,8 +942,6 @@ async def test_render_partition_routes_outbox_per_channel(monkeypatch):
     monkeypatch.setattr(actions_applier, "uuid4", lambda: "request-1")
 
     settings = SimpleNamespace(
-        manager_chat_ids_list=[99],
-        manager_bot_token="manager",
         manager_whatsapp_numbers_list=["77001234567"],
     )
 
@@ -979,11 +966,7 @@ async def test_render_partition_routes_outbox_per_channel(monkeypatch):
     result = await actions_applier.apply_actions(actions, 10, None, None, object(), object(), settings)
 
     assert result["order"]["request_id"] == "request-1"
-    assert len(outbox_rows) == 2
-
-    tg_row = next(r for r in outbox_rows if r["channel"] == "telegram")
-    assert tg_row["chat_id"] == 99
-    assert tg_row["bot_type"] == "manager"
+    assert len(outbox_rows) == 1
 
     wa_row = next(r for r in outbox_rows if r["channel"] == "whatsapp")
     assert wa_row["chat_id"] == int("77001234567")

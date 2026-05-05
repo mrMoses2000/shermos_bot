@@ -106,7 +106,6 @@ async def require_jwt_auth(
 
 
 async def require_auth(
-    x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data"),
     x_cms_admin_token: str = Header(default="", alias="X-CMS-Admin-Token"),
     authorization: str = Header(default="", alias="Authorization"),
 ) -> dict[str, Any]:
@@ -115,19 +114,10 @@ async def require_auth(
         try:
             return await require_jwt_auth(authorization)
         except HTTPException:
-            if not x_telegram_init_data and not x_cms_admin_token:
+            if not x_cms_admin_token:
                 raise
 
-    # Fallback to Telegram
-    if x_telegram_init_data:
-        try:
-            data = validate_init_data(x_telegram_init_data, settings.manager_bot_token)
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        data["auth_method"] = "telegram"
-        return data
-
-    # Fallback to CMS Admin Token (for setup)
+    # Fallback to CMS Admin Token (emergency backup)
     if x_cms_admin_token:
         if settings.cms_admin_token and hmac.compare_digest(x_cms_admin_token, settings.cms_admin_token):
             return {"auth_method": "cms_admin", "sub": "admin"}

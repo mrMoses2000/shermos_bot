@@ -1,7 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
 from src.api.app import app
-from tests.helpers import signed_init_data, FakePool
+from src.api.auth import create_access_token
+from tests.helpers import FakePool
+
+
+def _auth_headers() -> dict:
+    token = create_access_token({"sub": "test-manager", "type": "access"})
+    return {"Authorization": f"Bearer {token}"}
 
 client = TestClient(app)
 
@@ -30,23 +36,20 @@ def test_create_work(fake_pool):
     fake_pool.results = [{"id": "w1", "partition_type": "fixed", "title": "Test"}]
     res = client.post(
         "/api/gallery/works",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers=_auth_headers(),
         json={"partition_type": "fixed", "title": "Test"}
     )
     assert res.status_code == 200
     assert res.json()["id"] == "w1"
 
-def test_create_work_captures_chat_id(fake_pool):
+def test_create_work_with_jwt_auth(fake_pool):
     fake_pool.results = [{"id": "w1", "partition_type": "fixed", "title": ""}]
-    init_data = signed_init_data(user='{"id": 777, "first_name": "M"}')
     res = client.post(
         "/api/gallery/works",
-        headers={"X-Telegram-Init-Data": init_data},
+        headers=_auth_headers(),
         json={"partition_type": "fixed"},
     )
     assert res.status_code == 200
-    insert_call = next(c for c in fake_pool.calls if "INSERT INTO gallery_works" in c[1])
-    assert 777 in insert_call[2]
 
 def test_upload_photos(fake_pool, tmp_path, monkeypatch):
     from src.config import settings
@@ -61,7 +64,7 @@ def test_upload_photos(fake_pool, tmp_path, monkeypatch):
     
     res = client.post(
         "/api/gallery/works/w1/photos",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers=_auth_headers(),
         files=[
             ("files", ("test1.png", PNG_1x1, "image/png")),
             ("files", ("test2.png", PNG_1x1, "image/png"))
@@ -76,7 +79,7 @@ def test_upload_invalid_format(fake_pool):
     fake_pool.results = [{"id": "w1", "partition_type": "fixed", "photos": []}]
     res = client.post(
         "/api/gallery/works/w1/photos",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers=_auth_headers(),
         files=[("files", ("test.txt", b"not an image", "text/plain"))]
     )
     assert res.status_code == 400
@@ -88,7 +91,7 @@ def test_upload_oversize(fake_pool, monkeypatch):
     fake_pool.results = [{"id": "w1", "partition_type": "fixed", "photos": []}]
     res = client.post(
         "/api/gallery/works/w1/photos",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers=_auth_headers(),
         files=[("files", ("test.png", PNG_1x1, "image/png"))]
     )
     assert res.status_code == 413
@@ -146,7 +149,7 @@ def test_upload_decompression_bomb(fake_pool, monkeypatch):
 
     res = client.post(
         "/api/gallery/works/w1/photos",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers=_auth_headers(),
         files=[("files", ("test.png", PNG_1x1, "image/png"))]
     )
     assert res.status_code == 400
@@ -158,7 +161,7 @@ def test_upload_mime_not_in_allowlist(fake_pool):
     fake_pool.results = [{"id": "w1", "partition_type": "fixed", "photos": []}]
     res = client.post(
         "/api/gallery/works/w1/photos",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers=_auth_headers(),
         files=[("files", ("shell.sh", b"#!/bin/bash\nrm -rf /", "application/x-sh"))]
     )
     assert res.status_code == 400
@@ -171,7 +174,7 @@ def test_get_work(fake_pool):
     ]
     res = client.get(
         "/api/gallery/works/w1",
-        headers={"X-Telegram-Init-Data": signed_init_data()}
+        headers=_auth_headers()
     )
     assert res.status_code == 200
     assert res.json()["id"] == "w1"
@@ -181,7 +184,7 @@ def test_update_work(fake_pool):
     fake_pool.results = [{"id": "w1", "is_published": False}]
     res = client.patch(
         "/api/gallery/works/w1",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers=_auth_headers(),
         json={"is_published": False}
     )
     assert res.status_code == 200
@@ -203,7 +206,7 @@ def test_delete_work(fake_pool, tmp_path, monkeypatch):
     ]
     res = client.delete(
         "/api/gallery/works/w1",
-        headers={"X-Telegram-Init-Data": signed_init_data()}
+        headers=_auth_headers()
     )
     assert res.status_code == 200
     assert not f.exists()
@@ -236,7 +239,7 @@ def test_delete_work_file_unlink_fails_returns_500(fake_pool, tmp_path, monkeypa
 
     res = client.delete(
         "/api/gallery/works/w1",
-        headers={"X-Telegram-Init-Data": signed_init_data()}
+        headers=_auth_headers()
     )
     assert res.status_code == 500
     # No DELETE call should have been made to the DB
@@ -258,7 +261,7 @@ def test_delete_photo(fake_pool, tmp_path, monkeypatch):
     ]
     res = client.delete(
         "/api/gallery/photos/p1",
-        headers={"X-Telegram-Init-Data": signed_init_data()}
+        headers=_auth_headers()
     )
     assert res.status_code == 200
     assert not f.exists()
@@ -267,7 +270,7 @@ def test_delete_photo(fake_pool, tmp_path, monkeypatch):
     fake_pool.results = [None]
     res = client.delete(
         "/api/gallery/photos/missing",
-        headers={"X-Telegram-Init-Data": signed_init_data()}
+        headers=_auth_headers()
     )
     assert res.status_code == 404
 
@@ -294,7 +297,7 @@ def test_delete_photo_file_unlink_fails_returns_500(fake_pool, tmp_path, monkeyp
 
     res = client.delete(
         "/api/gallery/photos/p1",
-        headers={"X-Telegram-Init-Data": signed_init_data()}
+        headers=_auth_headers()
     )
     assert res.status_code == 500
     # Confirm delete_gallery_photo was not called (no DELETE query in pool calls)

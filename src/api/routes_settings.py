@@ -13,8 +13,6 @@ router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depe
 async def get_settings():
     return {
         "mini_app_url": settings.mini_app_url,
-        "webhook_url_client": settings.webhook_url_client,
-        "webhook_url_manager": settings.webhook_url_manager,
         "materials": config.get_section("materials"),
         "constraints": config.get_section("constraints"),
     }

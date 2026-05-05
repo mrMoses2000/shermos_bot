@@ -114,38 +114,6 @@ def _wa_payload(*, external_id: str, phone_e164: str, text: str = "Привет"
 
 
 # ---------------------------------------------------------------------------
-# C-01 — Telegram /start command sends greeting + Mini App keyboard
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_C01_telegram_start_command(
-    pg_pool_integration,
-    redis_client_integration,
-    reset_integration_db,
-    mock_telegram_sender,
-    worker_running,
-):
-    """/start Telegram update must produce an outbound greeting message."""
-    CHAT_ID = 110001
-    UPDATE_ID = 110001
-    update = _telegram_update(UPDATE_ID, CHAT_ID, "/start", msg_type="command")
-    update["message"]["text"] = "/start"
-
-    is_new = await postgres.mark_update_received(pg_pool_integration, UPDATE_ID)
-    assert is_new
-    await postgres.insert_inbound_event(pg_pool_integration, UPDATE_ID, CHAT_ID, CHAT_ID, "/start", update)
-    job = Job(
-        update_id=UPDATE_ID, chat_id=CHAT_ID, user_id=CHAT_ID,
-        text="/start", msg_type="command", raw_update=update,
-    )
-    await redis_client_integration.enqueue_job("queue:incoming", job)
-
-    row = await asyncio.wait_for(_poll_outbound(pg_pool_integration, CHAT_ID), timeout=10)
-    assert row is not None, "Expected outbound row for /start"
-    assert "Shermos" in row["reply_text"] or "перегородк" in row["reply_text"].lower()
-
-
-# ---------------------------------------------------------------------------
 # C-02 — WhatsApp first "Привет" from a new number enqueues to queue:incoming
 # ---------------------------------------------------------------------------
 
@@ -508,74 +476,6 @@ async def test_C10_schedule_measurement_sunday(
 
 
 # ---------------------------------------------------------------------------
-# C-11 — Manager Telegram meas_confirm confirms measurement + notifies client
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_C11_manager_meas_confirm_telegram(
-    pg_pool_integration,
-    redis_client_integration,
-    reset_integration_db,
-    mock_telegram_sender,
-    worker_running,
-    monkeypatch,
-):
-    """Manager callback meas_confirm:N must set status='confirmed' in DB."""
-    from src.engine.measurement_service import schedule_measurement
-    from src.config import settings
-
-    CLIENT_CHAT_ID = 110011
-    MANAGER_CHAT_ID = 999011
-    MANAGER_UPDATE_ID = 110011
-
-    # Create client rows first (FK constraints: measurements and conversation_state → clients)
-    await postgres.create_client(pg_pool_integration, CLIENT_CHAT_ID, "Test Client", "test_client")
-    # Manager needs a client row too: _handle_measurement_callback calls upsert_conversation_state
-    # for the manager's chat_id when status is 'rejected'
-    await postgres.create_client(pg_pool_integration, MANAGER_CHAT_ID, "Test Manager", "test_manager")
-
-    tz = ZoneInfo(settings.timezone)
-    target_dt = datetime.now(tz) + timedelta(days=4)
-    while target_dt.weekday() == 6:
-        target_dt += timedelta(days=1)
-
-    meas = await schedule_measurement(
-        pg_pool_integration, CLIENT_CHAT_ID,
-        target_dt.strftime("%Y-%m-%d"), "10:00",
-        "Test Client", "79001110011", "Тест", settings.timezone,
-    )
-    meas_id = meas["id"]
-
-    # Insert inbound event for client so _handle_measurement_callback can look it up
-    # (inbound_events has FK → processed_updates, so mark_update_received first)
-    await postgres.mark_update_received(pg_pool_integration, 1110011)
-    await postgres.insert_inbound_event(
-        pg_pool_integration, 1110011, CLIENT_CHAT_ID, CLIENT_CHAT_ID, "", {}
-    )
-
-    is_new = await postgres.mark_update_received(pg_pool_integration, MANAGER_UPDATE_ID)
-    assert is_new
-    await postgres.insert_inbound_event(
-        pg_pool_integration, MANAGER_UPDATE_ID, MANAGER_CHAT_ID, MANAGER_CHAT_ID,
-        f"meas_confirm:{meas_id}", {}
-    )
-    job = Job(
-        update_id=MANAGER_UPDATE_ID, chat_id=MANAGER_CHAT_ID, user_id=MANAGER_CHAT_ID,
-        text=f"meas_confirm:{meas_id}", msg_type="command",
-        raw_update={}, bot_type="manager",
-    )
-    await redis_client_integration.enqueue_job("queue:manager", job)
-
-    status = await asyncio.wait_for(
-        _poll_update_status(pg_pool_integration, MANAGER_UPDATE_ID, "completed"), timeout=10
-    )
-    assert status == "completed"
-
-    row = await pg_pool_integration.fetchrow("SELECT status FROM measurements WHERE id=$1", meas_id)
-    assert row["status"] == "confirmed"
-
-
-# ---------------------------------------------------------------------------
 # C-12 — Manager WhatsApp meas_confirm (allowlisted phone)
 # ---------------------------------------------------------------------------
 
@@ -658,8 +558,7 @@ async def test_C13_auto_confirm_after_15_min(
     from src.queue.worker import _notify_auto_confirmed_measurements
     from src.config import settings
 
-    MANAGER_CHAT_ID = 9990013
-    monkeypatch_settings_chat = f"{MANAGER_CHAT_ID}"
+    MANAGER_PHONE = "79000000013"
 
     # Create client row first (measurements have FK → clients)
     await postgres.create_client(pg_pool_integration, 110013, "Auto Client", "auto_client")
@@ -693,14 +592,12 @@ async def test_C13_auto_confirm_after_15_min(
 
     # Now call _notify_auto_confirmed_measurements to produce outbox rows
     with patch("src.queue.worker.settings") as mock_settings:
-        mock_settings.manager_chat_ids_list = [MANAGER_CHAT_ID]
-        mock_settings.manager_whatsapp_numbers_list = []
-        mock_settings.telegram_bot_token = "test-token"
+        mock_settings.manager_whatsapp_numbers_list = [MANAGER_PHONE]
         mock_settings.timezone = settings.timezone
         await _notify_auto_confirmed_measurements(pg_pool_integration, mock_telegram_sender, confirmed)
 
     outbox_rows = await pg_pool_integration.fetch(
-        "SELECT channel FROM outbound_events WHERE chat_id=$1", MANAGER_CHAT_ID
+        "SELECT channel FROM outbound_events WHERE channel='whatsapp' AND bot_type='manager'"
     )
     assert len(outbox_rows) >= 1, "Manager must receive auto-confirm notification in outbox"
 
@@ -826,36 +723,6 @@ async def test_C15_manager_alternative_time_proposal(
         "SELECT * FROM outbound_events WHERE chat_id=$1", MANAGER_CHAT_ID
     )
     assert len(slots) >= 1 or len(outbound) >= 1, "Slot proposal must produce a slot or outbound message"
-
-
-# ---------------------------------------------------------------------------
-# C-16 — Duplicate Telegram update_id is skipped
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_C16_telegram_duplicate_update_id_skipped(
-    pg_pool_integration,
-    redis_client_integration,
-    reset_integration_db,
-    mock_telegram_sender,
-    mock_call_llm,
-    worker_running,
-):
-    """Second ingest with same update_id must produce only one inbound_events row."""
-    CHAT_ID = 110016
-    UPDATE_ID = 110016
-    update = _telegram_update(UPDATE_ID, CHAT_ID, "первое сообщение")
-
-    job1 = await _ingest_telegram(pg_pool_integration, redis_client_integration, update)
-    assert job1 is not None
-
-    job2 = await _ingest_telegram(pg_pool_integration, redis_client_integration, update)
-    assert job2 is None, "Duplicate must be rejected"
-
-    rows = await pg_pool_integration.fetch(
-        "SELECT * FROM inbound_events WHERE telegram_update_id=$1", UPDATE_ID
-    )
-    assert len(rows) == 1, "Exactly one inbound_events row expected"
 
 
 # ---------------------------------------------------------------------------
@@ -1058,29 +925,6 @@ async def test_C22_mini_app_gallery_list(
     works = await postgres.list_gallery_works(pg_pool_integration)
     assert isinstance(works, list)
     assert len(works) >= 2, f"Expected at least 2 works, got {works}"
-
-
-# ---------------------------------------------------------------------------
-# C-23 — Mini App Telegram initData auth returns auth_method='telegram'
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_C23_mini_app_telegram_init_data_auth(
-    pg_pool_integration,
-    redis_client_integration,
-    reset_integration_db,
-):
-    """Valid Telegram initData must be accepted by validate_init_data."""
-    # Note: the HTTP layer (CORSMiddleware/anyio task group) conflicts with the
-    # session-scoped asyncpg pool inside the pytest-asyncio event loop.
-    # We verify the auth logic directly — validate_init_data must not raise.
-    from src.api.auth import validate_init_data
-    from src.config import settings
-    from tests.helpers import signed_init_data
-
-    init_data = signed_init_data()
-    result = validate_init_data(init_data, settings.manager_bot_token)
-    assert result.get("auth_method") == "telegram" or "auth_date" in result
 
 
 # ---------------------------------------------------------------------------

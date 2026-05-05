@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 
 from src.api.app import create_app
 from src.api.deps import get_pool
-from tests.helpers import FakePool, signed_init_data
+from src.api.auth import create_access_token
+from tests.helpers import FakePool
 
 
 # ---------------------------------------------------------------------------
@@ -21,7 +22,8 @@ from tests.helpers import FakePool, signed_init_data
 
 
 def _headers() -> dict[str, str]:
-    return {"X-Telegram-Init-Data": signed_init_data()}
+    token = create_access_token({"sub": "test-manager"})
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _make_fake_response(data: dict[str, Any], status: int = 200) -> MagicMock:

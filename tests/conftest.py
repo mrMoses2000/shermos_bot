@@ -4,10 +4,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-os.environ.setdefault("TELEGRAM_BOT_TOKEN", "client-token")
-os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "client-secret")
-os.environ.setdefault("MANAGER_BOT_TOKEN", "manager-token")
-os.environ.setdefault("MANAGER_WEBHOOK_SECRET", "manager-secret")
 os.environ.setdefault("POSTGRES_PASSWORD", "change_me")
 os.environ.setdefault("LOG_FORMAT", "text")
 
@@ -245,15 +241,11 @@ async def worker_running(
     fake_wa_client = FakeWhatsAppSender(role="client")
     fake_wa_manager = FakeWhatsAppSender(role="manager")
 
-    orig_worker_tg = worker_mod.telegram_sender
-    orig_common_tg = sender_common_mod.telegram_sender
     orig_worker_wa = worker_mod.whatsapp_sender
     orig_common_wa = sender_common_mod.whatsapp_sender
     orig_worker_mgr_wa = worker_mod.manager_whatsapp_sender
     orig_common_mgr_wa = sender_common_mod.manager_whatsapp_sender
 
-    worker_mod.telegram_sender = mock_telegram_sender
-    sender_common_mod.telegram_sender = mock_telegram_sender
     worker_mod.whatsapp_sender = fake_wa_client
     sender_common_mod.whatsapp_sender = fake_wa_client
     worker_mod.manager_whatsapp_sender = fake_wa_manager
@@ -261,13 +253,13 @@ async def worker_running(
 
     tasks = [
         asyncio.create_task(
-            _client_loop(pg_pool_integration, redis_client_integration, mock_telegram_sender)
+            _client_loop(pg_pool_integration, redis_client_integration, fake_wa_client)
         ),
         asyncio.create_task(
-            _manager_loop(pg_pool_integration, redis_client_integration, mock_telegram_sender)
+            _manager_loop(pg_pool_integration, redis_client_integration, fake_wa_manager)
         ),
         asyncio.create_task(
-            run_outbox_dispatcher(pg_pool_integration, mock_telegram_sender, interval=1)
+            run_outbox_dispatcher(pg_pool_integration, interval=1)
         ),
     ]
     try:
@@ -278,8 +270,6 @@ async def worker_running(
         # Await cancellation without raising
         await asyncio.gather(*tasks, return_exceptions=True)
         # Restore module-level senders
-        worker_mod.telegram_sender = orig_worker_tg
-        sender_common_mod.telegram_sender = orig_common_tg
         worker_mod.whatsapp_sender = orig_worker_wa
         sender_common_mod.whatsapp_sender = orig_common_wa
         worker_mod.manager_whatsapp_sender = orig_worker_mgr_wa

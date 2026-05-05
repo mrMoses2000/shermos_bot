@@ -252,17 +252,6 @@ async def apply_actions(
                         f"Клиент chat_id: <code>{chat_id}</code>\n"
                         f"Сумма: <b>{price['total_price']} {price['currency']}</b>"
                     )
-                    for manager_chat_id in settings.manager_chat_ids_list:
-                        await postgres.insert_outbound_event(
-                            pg_pool,
-                            chat_id=manager_chat_id,
-                            channel="telegram",
-                            reply_text=_new_order_text,
-                            reply_markup=None,
-                            bot_type="manager",
-                            inbound_event_id=None,
-                        )
-
                     for manager_phone in getattr(settings, "manager_whatsapp_numbers_list", []):
                         await postgres.insert_outbound_event(
                             pg_pool,
@@ -325,17 +314,6 @@ async def apply_actions(
             f"Замер: <code>#{m_id}</code>\n\n"
             "Если не подтвердить и не отклонить за 15 минут, замер подтвердится автоматически."
         )
-        for manager_chat_id in settings.manager_chat_ids_list:
-            await postgres.insert_outbound_event(
-                pg_pool,
-                chat_id=manager_chat_id,
-                channel="telegram",
-                reply_text=_new_measurement_text,
-                reply_markup=manager_measurement_keyboard(m_id),
-                bot_type="manager",
-                inbound_event_id=None,
-            )
-
         for manager_phone in getattr(settings, "manager_whatsapp_numbers_list", []):
             await postgres.insert_outbound_event(
                 pg_pool,

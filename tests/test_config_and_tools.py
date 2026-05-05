@@ -13,17 +13,9 @@ from src.utils.query_parser import (
 
 def test_settings_properties():
     settings = Settings(
-        telegram_bot_token="client",
-        telegram_webhook_secret="client-secret",
-        manager_bot_token="manager",
-        manager_webhook_secret="manager-secret",
-        manager_chat_ids="1, 2",
         manager_whatsapp_numbers="+7-706-739-66-26, 77001234567",
     )
 
-    assert settings.webhook_url_client.endswith("/webhook/client")
-    assert settings.webhook_url_manager.endswith("/webhook/manager")
-    assert settings.manager_chat_ids_list == [1, 2]
     assert settings.manager_whatsapp_numbers_list == ["77067396626", "77001234567"]
     assert settings.postgres_dsn.startswith("postgresql://")
 

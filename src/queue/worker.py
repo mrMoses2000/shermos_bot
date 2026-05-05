@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 
 from src.bot.keyboards import gallery_offer_keyboard, manager_measurement_keyboard, open_mini_app_keyboard, rate_render_keyboard
 from pathlib import Path
-from src.bot.telegram_sender import TelegramSender, telegram_sender
 from src.bot.transcribe import TranscriptionError, extract_voice_file_id, transcribe_voice
 from src.bot.whatsapp_sender import WhatsAppSender, manager_whatsapp_sender, whatsapp_sender
 from src.bot.sender_common import send_and_record
@@ -121,7 +120,7 @@ CLIENT_COMMANDS = {
 }
 
 
-async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> bool:
+async def _handle_client_command(job: Job, pg_pool, sender: WhatsAppSender) -> bool:
     text = (job.text or "").split()[0].lower()
     if text == "/clear":
         await postgres.clear_chat_messages(pg_pool, job.chat_id)
@@ -134,7 +133,7 @@ async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> b
         await send_and_record(
             pg_pool,
             sender,
-            settings.telegram_bot_token,
+            "",
             job.chat_id,
             "История диалога очищена.",
         )
@@ -145,7 +144,7 @@ async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> b
         await send_and_record(
             pg_pool,
             sender,
-            settings.telegram_bot_token,
+            "",
             job.chat_id,
             "Текущий заказ отменён. Можно начать новый расчёт.",
         )
@@ -163,7 +162,7 @@ async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> b
                     f"{price.get('total_price', '—')} {price.get('currency', '')}"
                 )
             reply = "\n".join(lines)
-        await send_and_record(pg_pool, sender, settings.telegram_bot_token, job.chat_id, reply)
+        await send_and_record(pg_pool, sender, "", job.chat_id, reply)
         return True
     if text in CLIENT_COMMANDS:
         first_name, username = _telegram_user(job)
@@ -171,7 +170,7 @@ async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> b
         await send_and_record(
             pg_pool,
             sender,
-            settings.telegram_bot_token,
+            "",
             job.chat_id,
             CLIENT_COMMANDS[text],
         )
@@ -179,7 +178,7 @@ async def _handle_client_command(job: Job, pg_pool, sender: TelegramSender) -> b
     return False
 
 
-async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_result: dict[str, Any]) -> None:
+async def _send_render_result(job: Job, pg_pool, sender: WhatsAppSender, action_result: dict[str, Any]) -> None:
     render_paths = action_result.get("render_paths")
     if not render_paths:
         return
@@ -236,9 +235,9 @@ async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_
     caption = "\n".join(lines)
 
     if len(paths) == 1:
-        await sender.send_photo(settings.telegram_bot_token, job.chat_id, paths[0], caption=caption)
+        await sender.send_photo("", job.chat_id, paths[0], caption=caption)
     else:
-        await sender.send_media_group(settings.telegram_bot_token, job.chat_id, paths, caption=caption)
+        await sender.send_media_group("", job.chat_id, paths, caption=caption)
     collected = order.get("collected_params") or {}
     if isinstance(collected, str):
         import json as _json
@@ -248,7 +247,7 @@ async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_
             collected = {}
     shape = collected.get("shape", "")
     await sender.send_message(
-        settings.telegram_bot_token,
+        "",
         job.chat_id,
         "Показать 3 реальные работы такого же типа? Это поможет представить результат.",
         reply_markup=gallery_offer_keyboard(order.get("request_id", ""), pt, shape),
@@ -258,7 +257,7 @@ async def _send_render_result(job: Job, pg_pool, sender: TelegramSender, action_
 async def _resolve_voice_text(
     job: Job,
     pg_pool,
-    sender: TelegramSender,
+    sender: WhatsAppSender,
 ) -> bool:
     """Download and transcribe a voice/audio message, mutating job.text in place.
 
@@ -269,7 +268,7 @@ async def _resolve_voice_text(
     if job.channel == "whatsapp":
         if not job.media_path:
             await send_and_record(
-                pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+                pg_pool, sender, "", job.chat_id,
                 "Не удалось получить голосовое сообщение. Отправьте, пожалуйста, текстом.",
             )
             await postgres.mark_update_status(pg_pool, job.update_id, "failed", "voice_no_media_path")
@@ -278,7 +277,7 @@ async def _resolve_voice_text(
         file_id = extract_voice_file_id(job.raw_update)
         if not file_id:
             await send_and_record(
-                pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+                pg_pool, sender, "", job.chat_id,
                 "Не удалось распознать голосовое сообщение. Отправьте, пожалуйста, текстом.",
             )
             await postgres.mark_update_status(pg_pool, job.update_id, "failed", "voice_no_file_id")
@@ -286,24 +285,24 @@ async def _resolve_voice_text(
 
     if not settings.assemblyai_api_key:
         await send_and_record(
-            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            pg_pool, sender, "", job.chat_id,
             "Распознавание голосовых пока недоступно. Напишите, пожалуйста, текстом.",
         )
         await postgres.mark_update_status(pg_pool, job.update_id, "failed", "assemblyai_not_configured")
         return False
 
     try:
-        await sender.send_chat_action(settings.telegram_bot_token, job.chat_id, action="record_voice")
+        await sender.send_chat_action("", job.chat_id, action="record_voice")
         if job.channel == "whatsapp":
             audio_bytes = await asyncio.to_thread(Path(job.media_path).read_bytes)
         else:
-            file_info = await sender.get_file(settings.telegram_bot_token, file_id)
-            audio_bytes = await sender.download_file(settings.telegram_bot_token, file_info["file_path"])
+            file_info = await sender.get_file("", file_id)
+            audio_bytes = await sender.download_file("", file_info["file_path"])
         transcript = await transcribe_voice(audio_bytes)
     except TranscriptionError as exc:
         logger.warning("voice_transcription_failed", extra={"chat_id": job.chat_id, "error": str(exc)})
         await send_and_record(
-            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            pg_pool, sender, "", job.chat_id,
             "Не удалось распознать голосовое сообщение. Попробуйте ещё раз или напишите текстом.",
         )
         await postgres.mark_update_status(pg_pool, job.update_id, "failed", f"transcription: {exc}")
@@ -313,7 +312,7 @@ async def _resolve_voice_text(
             "voice_download_failed", extra={"chat_id": job.chat_id, "error": str(exc)},
         )
         await send_and_record(
-            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            pg_pool, sender, "", job.chat_id,
             "Не удалось получить голосовое сообщение. Попробуйте ещё раз.",
         )
         await postgres.mark_update_status(pg_pool, job.update_id, "failed", f"voice_download: {exc}")
@@ -321,7 +320,7 @@ async def _resolve_voice_text(
 
     if not transcript:
         await send_and_record(
-            pg_pool, sender, settings.telegram_bot_token, job.chat_id,
+            pg_pool, sender, "", job.chat_id,
             "Голосовое сообщение не распознано (тишина?). Попробуйте ещё раз.",
         )
         await postgres.mark_update_status(pg_pool, job.update_id, "failed", "empty_transcript")
@@ -333,11 +332,11 @@ async def _resolve_voice_text(
     return True
 
 
-async def _send_gallery_works(job: Job, pg_pool, sender: TelegramSender, order_id: str, partition_type: str, shape: str = "") -> None:
+async def _send_gallery_works(job: Job, pg_pool, sender: WhatsAppSender, order_id: str, partition_type: str, shape: str = "") -> None:
     works = await postgres.pick_random_gallery_works(pg_pool, partition_type, shape=shape or None, limit=3)
     if not works:
         await sender.send_message(
-            settings.telegram_bot_token, job.chat_id,
+            "", job.chat_id,
             "Скоро пополним базу реальными фотографиями этого типа.",
         )
     else:
@@ -346,17 +345,17 @@ async def _send_gallery_works(job: Job, pg_pool, sender: TelegramSender, order_i
             paths = [str(Path(settings.gallery_dir) / p["file_path"]) for p in photos]
             caption = work.get("title") or "Реальная работа"
             if len(paths) >= 2:
-                await sender.send_media_group(settings.telegram_bot_token, job.chat_id, paths, caption=caption)
+                await sender.send_media_group("", job.chat_id, paths, caption=caption)
             elif len(paths) == 1:
-                await sender.send_photo(settings.telegram_bot_token, job.chat_id, paths[0], caption=caption)
+                await sender.send_photo("", job.chat_id, paths[0], caption=caption)
     
     await sender.send_message(
-        settings.telegram_bot_token, job.chat_id,
+        "", job.chat_id,
         "Оцените, пожалуйста, рендер:",
         reply_markup=rate_render_keyboard(order_id),
     )
 
-async def _handle_client_callback(job: Job, pg_pool, sender: TelegramSender) -> bool:
+async def _handle_client_callback(job: Job, pg_pool, sender: WhatsAppSender) -> bool:
     if not job.callback_data:
         return False
         
@@ -381,7 +380,7 @@ async def _handle_client_callback(job: Job, pg_pool, sender: TelegramSender) -> 
     if action == "gallery_skip":
         order_id = parts[1]
         await sender.send_message(
-            settings.telegram_bot_token, job.chat_id,
+            "", job.chat_id,
             "Оцените, пожалуйста, рендер:",
             reply_markup=rate_render_keyboard(order_id),
         )
@@ -393,7 +392,7 @@ async def process_client_job(
     job: Job,
     pg_pool,
     redis_client: RedisClient,
-    sender: TelegramSender = telegram_sender,
+    sender: WhatsAppSender = whatsapp_sender,
 ) -> None:
     if job.channel == "whatsapp":
         sender = whatsapp_sender
@@ -411,7 +410,7 @@ async def process_client_job(
             return
         await postgres.mark_update_status(pg_pool, job.update_id, "processing")
         if settings.send_typing_indicator:
-            await sender.send_chat_action(settings.telegram_bot_token, job.chat_id)
+            await sender.send_chat_action("", job.chat_id)
 
         if job.msg_type == "callback_query" and await _handle_client_callback(job, pg_pool, sender):
             await postgres.mark_update_status(pg_pool, job.update_id, "completed")
@@ -452,7 +451,7 @@ async def process_client_job(
         await send_and_record(
             pg_pool,
             sender,
-            settings.telegram_bot_token,
+            "",
             job.chat_id,
             parsed.reply_text,
         )
@@ -466,7 +465,7 @@ async def process_client_job(
         await send_and_record(
             pg_pool,
             sender,
-            settings.telegram_bot_token,
+            "",
             job.chat_id,
             str(exc),
         )
@@ -479,7 +478,7 @@ async def process_client_job(
             "Запрос занял слишком много времени. Я сохранил ваше сообщение. "
             "Напишите «продолжи», и я продолжу с него."
         )
-        await send_and_record(pg_pool, sender, settings.telegram_bot_token, job.chat_id, timeout_reply)
+        await send_and_record(pg_pool, sender, "", job.chat_id, timeout_reply)
         await postgres.insert_chat_message(pg_pool, job.chat_id, "user", job.text)
         await postgres.insert_chat_message(pg_pool, job.chat_id, "assistant", timeout_reply)
         await _refresh_memory_best_effort(pg_pool, job.chat_id)
@@ -490,7 +489,7 @@ async def process_client_job(
             await send_and_record(
                 pg_pool,
                 sender,
-                settings.telegram_bot_token,
+                "",
                 job.chat_id,
                 "Произошла ошибка. Попробуйте еще раз или напишите менеджеру.",
             )
@@ -510,7 +509,7 @@ async def _handle_measurement_callback(
     text: str,
     job: Job,
     pg_pool,
-    sender: TelegramSender,
+    sender: WhatsAppSender,
 ) -> None:
     """Handle meas_confirm:{id} and meas_reject:{id} callbacks from manager."""
     from src.engine.measurement_service import update_measurement_status
@@ -539,19 +538,19 @@ async def _handle_measurement_callback(
                     new_status = "cancelled"
                 except ValueError as cancel_exc:
                     await send_and_record(
-                        pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                        pg_pool, sender, "", job.chat_id,
                         f"Ошибка: {cancel_exc}", bot_type="manager",
                     )
                     return
             else:
                 await send_and_record(
-                    pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                    pg_pool, sender, "", job.chat_id,
                     f"Ошибка: {exc}", bot_type="manager",
                 )
                 return
         else:
             await send_and_record(
-                pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                pg_pool, sender, "", job.chat_id,
                 f"Ошибка: {exc}", bot_type="manager",
             )
             return
@@ -579,7 +578,7 @@ async def _handle_measurement_callback(
         )
 
     await send_and_record(
-        pg_pool, sender, settings.manager_bot_token, job.chat_id,
+        pg_pool, sender, "", job.chat_id,
         manager_text,
         bot_type="manager",
     )
@@ -588,7 +587,7 @@ async def _handle_measurement_callback(
     client_chat_id = measurement["client_chat_id"]
     last_event = await postgres.get_last_inbound_event(pg_pool, client_chat_id)
     is_whatsapp = last_event and last_event.get("channel") == "whatsapp"
-    client_sender = whatsapp_sender if is_whatsapp else telegram_sender
+    client_sender = whatsapp_sender if is_whatsapp else whatsapp_sender
     client_external_chat_id = last_event.get("external_chat_id") if is_whatsapp else client_chat_id
 
     if new_status == "confirmed":
@@ -606,7 +605,7 @@ async def _handle_measurement_callback(
         )
 
     await send_and_record(
-        pg_pool, client_sender, settings.telegram_bot_token, client_external_chat_id,
+        pg_pool, client_sender, "", client_external_chat_id,
         client_msg, bot_type="client",
     )
 
@@ -615,7 +614,7 @@ async def _handle_manager_slot_proposal(
     text: str,
     job: Job,
     pg_pool,
-    sender: TelegramSender,
+    sender: WhatsAppSender,
 ) -> bool:
     """Handle manager free-text alternative slot after rejecting/cancelling a measurement."""
     from src.engine.measurement_service import parse_slot_proposal, upsert_measurement_slot
@@ -639,7 +638,7 @@ async def _handle_manager_slot_proposal(
         )
     except ValueError as exc:
         await send_and_record(
-            pg_pool, sender, settings.manager_bot_token, job.chat_id,
+            pg_pool, sender, "", job.chat_id,
             f"Не могу сохранить слот: {exc}",
             bot_type="manager",
         )
@@ -648,14 +647,14 @@ async def _handle_manager_slot_proposal(
     await postgres.upsert_conversation_state(pg_pool, job.chat_id, "idle", None, {})
     slot_time = slot["slot_start"].strftime("%d.%m.%Y %H:%M")
     await send_and_record(
-        pg_pool, sender, settings.manager_bot_token, job.chat_id,
+        pg_pool, sender, "", job.chat_id,
         f"Открытый слот сохранён: <b>{slot_time}</b>.",
         bot_type="manager",
     )
     return True
 
 
-async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, measurements: list[dict]) -> None:
+async def _notify_auto_confirmed_measurements(pg_pool, sender: WhatsAppSender, measurements: list[dict]) -> None:
     for measurement in measurements:
         m_time = measurement["scheduled_time"].strftime("%d.%m.%Y %H:%M")
         
@@ -669,7 +668,7 @@ async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, m
             await send_and_record(
                 pg_pool,
                 client_sender,
-                settings.telegram_bot_token if not is_whatsapp else "",
+                "" if not is_whatsapp else "",
                 external_chat_id,
                 (
                     "<b>Ваш замер автоматически подтверждён.</b>\n\n"
@@ -684,16 +683,6 @@ async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, m
 
         _auto_confirm_text = f"Замер #{measurement['id']} на <b>{m_time}</b> автоматически подтверждён."
         _m_id = int(measurement["id"])
-        for manager_chat_id in settings.manager_chat_ids_list:
-            await postgres.insert_outbound_event(
-                pg_pool,
-                chat_id=manager_chat_id,
-                channel="telegram",
-                reply_text=_auto_confirm_text,
-                reply_markup=manager_measurement_keyboard(_m_id),
-                bot_type="manager",
-                inbound_event_id=None,
-            )
         for manager_phone in settings.manager_whatsapp_numbers_list:
             await postgres.insert_outbound_event(
                 pg_pool,
@@ -707,7 +696,7 @@ async def _notify_auto_confirmed_measurements(pg_pool, sender: TelegramSender, m
             )
 
 
-async def _measurement_auto_confirm_loop(pg_pool, sender: TelegramSender, interval_seconds: int = 60) -> None:
+async def _measurement_auto_confirm_loop(pg_pool, sender: WhatsAppSender, interval_seconds: int = 60) -> None:
     from src.engine.measurement_service import auto_confirm_due_measurements
 
     while True:
@@ -726,7 +715,7 @@ async def process_manager_job(
     job: Job,
     pg_pool,
     redis_client: RedisClient,
-    sender: TelegramSender = telegram_sender,
+    sender: WhatsAppSender = manager_whatsapp_sender,
 ) -> None:
     if job.channel == "whatsapp":
         sender = manager_whatsapp_sender
@@ -745,7 +734,7 @@ async def process_manager_job(
             await send_and_record(
                 pg_pool,
                 sender,
-                settings.manager_bot_token,
+                "",
                 job.chat_id,
                 "Shermos manager bot работает.",
                 bot_type="manager",
@@ -759,7 +748,7 @@ async def process_manager_job(
             await send_and_record(
                 pg_pool,
                 sender,
-                settings.manager_bot_token,
+                "",
                 job.chat_id,
                 "\n".join(lines) if orders else "Заказов пока нет.",
                 bot_type="manager",
@@ -770,7 +759,7 @@ async def process_manager_job(
             await send_and_record(
                 pg_pool,
                 sender,
-                settings.manager_bot_token,
+                "",
                 job.chat_id,
                 f"Статус заказа <code>{order_id}</code> обновлен: {status}",
                 bot_type="manager",
@@ -784,7 +773,7 @@ async def process_manager_job(
             meas = await pool_fetchrow_safe(pg_pool, meas_id)
             phone = meas.get("client_phone", "") if meas else ""
             reply = f"Телефон клиента: {phone}" if phone else "Телефон не указан."
-            await send_and_record(pg_pool, sender, settings.manager_bot_token, job.chat_id, reply, bot_type="manager")
+            await send_and_record(pg_pool, sender, "", job.chat_id, reply, bot_type="manager")
         elif text.startswith("/measurements"):
             measurements = await postgres.list_measurements(pg_pool, upcoming_only=True, limit=10)
             lines = ["<b>Ближайшие замеры:</b>"]
@@ -792,7 +781,7 @@ async def process_manager_job(
                 t = m["scheduled_time"].strftime("%d.%m %H:%M")
                 lines.append(f"• #{m['id']} {t} — {m.get('client_name', '—')} ({m['status']})")
             await send_and_record(
-                pg_pool, sender, settings.manager_bot_token, job.chat_id,
+                pg_pool, sender, "", job.chat_id,
                 "\n".join(lines) if measurements else "Замеров пока нет.",
                 bot_type="manager",
             )
@@ -802,7 +791,7 @@ async def process_manager_job(
             await send_and_record(
                 pg_pool,
                 sender,
-                settings.manager_bot_token,
+                "",
                 job.chat_id,
                 "Команды: /orders, /health",
                 bot_type="manager",
@@ -815,7 +804,7 @@ async def process_manager_job(
         worker_jobs_in_flight.labels(queue="manager").dec()
 
 
-async def _client_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
+async def _client_loop(pg_pool, redis_client: RedisClient, sender: WhatsAppSender) -> None:
     while True:
         try:
             moved = await redis_client.move_due_jobs(CLIENT_DELAYED_QUEUE, CLIENT_QUEUE, limit=100)
@@ -834,7 +823,7 @@ async def _client_loop(pg_pool, redis_client: RedisClient, sender: TelegramSende
             await asyncio.sleep(5)
 
 
-async def _manager_loop(pg_pool, redis_client: RedisClient, sender: TelegramSender) -> None:
+async def _manager_loop(pg_pool, redis_client: RedisClient, sender: WhatsAppSender) -> None:
     while True:
         try:
             job = await redis_client.dequeue_job_safe(MANAGER_QUEUE, MANAGER_PROCESSING_QUEUE, timeout=5)
@@ -851,7 +840,6 @@ async def _manager_loop(pg_pool, redis_client: RedisClient, sender: TelegramSend
 
 
 def _log_startup_config() -> None:
-    mgr_chat_ids = settings.manager_chat_ids_list
     mgr_wa_numbers = settings.manager_whatsapp_numbers_list
     mgr_wa_bridge = getattr(settings, "manager_whatsapp_bridge_url", None)
     masked_wa = [f"***{n[-4:]}" for n in mgr_wa_numbers]
@@ -859,12 +847,11 @@ def _log_startup_config() -> None:
     logger.info(
         "worker_startup_config",
         extra={
-            "manager_chat_ids": mgr_chat_ids,
             "manager_whatsapp_numbers": masked_wa,
             "manager_whatsapp_bridge_url": mgr_wa_bridge,
         },
     )
-    if not mgr_chat_ids and not mgr_wa_numbers:
+    if not mgr_wa_numbers:
         logger.warning("no_manager_channels_configured")
 
 
@@ -876,7 +863,6 @@ async def run_worker() -> None:
     await postgres.seed_default_materials(pg_pool)
     redis_client = RedisClient(settings.redis_url)
     await redis_client.connect()
-    await telegram_sender.start()
     await whatsapp_sender.start()
     await manager_whatsapp_sender.start()
     recovered = await redis_client.recover_stuck_jobs(CLIENT_PROCESSING_QUEUE, CLIENT_QUEUE)
@@ -886,11 +872,11 @@ async def run_worker() -> None:
     if recovered_mgr:
         logger.info("recovered_stuck_jobs", extra={"count": recovered_mgr, "queue": "manager"})
     tasks = [
-        asyncio.create_task(_client_loop(pg_pool, redis_client, telegram_sender)),
-        asyncio.create_task(_manager_loop(pg_pool, redis_client, telegram_sender)),
-        asyncio.create_task(run_outbox_dispatcher(pg_pool, telegram_sender)),
+        asyncio.create_task(_client_loop(pg_pool, redis_client, whatsapp_sender)),
+        asyncio.create_task(_manager_loop(pg_pool, redis_client, manager_whatsapp_sender)),
+        asyncio.create_task(run_outbox_dispatcher(pg_pool)),
         asyncio.create_task(run_gemini_health_check()),
-        asyncio.create_task(_measurement_auto_confirm_loop(pg_pool, telegram_sender)),
+        asyncio.create_task(_measurement_auto_confirm_loop(pg_pool, whatsapp_sender)),
     ]
     try:
         await asyncio.gather(*tasks)
@@ -898,7 +884,6 @@ async def run_worker() -> None:
         for task in tasks:
             task.cancel()
         await redis_client.close()
-        await telegram_sender.close()
         await whatsapp_sender.close()
         await manager_whatsapp_sender.close()
         await postgres.close_pool(pg_pool)

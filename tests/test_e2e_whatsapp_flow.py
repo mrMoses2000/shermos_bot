@@ -315,14 +315,7 @@ async def test_whatsapp_outbox_uses_manager_whatsapp_sender(
     monkeypatch.setattr(dispatcher_mod, "manager_whatsapp_sender", fake_mgr_wa)
 
     # Run dispatcher once — should pick up the backdated pending event
-    from src.bot.telegram_sender import TelegramSender
-
-    class NoopTelegramSender(TelegramSender):
-        """A telegram sender that never actually calls the API."""
-        async def send_message(self, token, chat_id, text, **kwargs):
-            return 9999
-
-    await dispatch_once(pg_pool_integration, NoopTelegramSender())
+    await dispatch_once(pg_pool_integration)
 
     # Verify: the outbound_events row must now be 'sent'
     row = await pg_pool_integration.fetchrow(

@@ -9,7 +9,7 @@ from src.api.app import create_app
 from src.api.deps import get_pool
 from src.engine.pricing_cache import DEFAULT_MATERIALS, DEFAULT_PRICES, PricingCache
 from src.engine.pricing_engine import calculate_price
-from tests.helpers import signed_init_data
+from src.api.auth import create_access_token
 
 
 def _rows(data):
@@ -167,7 +167,7 @@ def test_api_invalidates_cache(monkeypatch):
 
     response = client.patch(
         "/api/pricing/prices/base_fixed_standard",
-        headers={"X-Telegram-Init-Data": signed_init_data()},
+        headers={"Authorization": f"Bearer {create_access_token({'sub': 'test-manager'})}"},
         json={"amount": 131},
     )
 

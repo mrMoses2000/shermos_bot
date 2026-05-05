@@ -38,7 +38,7 @@ def test_validate_init_data_rejects_bad_hash():
 async def test_require_auth_accepts_cms_admin_token(monkeypatch):
     monkeypatch.setattr("src.api.auth.settings.cms_admin_token", "secret-admin-token")
 
-    parsed = await require_auth("", "secret-admin-token", "")
+    parsed = await require_auth(x_cms_admin_token="secret-admin-token", authorization="")
 
     assert parsed == {"auth_method": "cms_admin", "sub": "admin"}
 
@@ -48,7 +48,7 @@ async def test_require_auth_rejects_bad_cms_admin_token(monkeypatch):
     monkeypatch.setattr("src.api.auth.settings.cms_admin_token", "secret-admin-token")
 
     with pytest.raises(HTTPException) as exc_info:
-        await require_auth("", "wrong", "")
+        await require_auth(x_cms_admin_token="wrong", authorization="")
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Invalid CMS admin token"
@@ -60,7 +60,7 @@ async def test_require_auth_accepts_jwt(monkeypatch):
     monkeypatch.setattr("src.api.auth.settings.jwt_issuer", "shermos-api")
 
     token = create_access_token({"sub": "77067396626"})
-    parsed = await require_auth("", "", f"Bearer {token}")
+    parsed = await require_auth(x_cms_admin_token="", authorization=f"Bearer {token}")
 
     assert parsed["sub"] == "77067396626"
     assert parsed["type"] == "access"

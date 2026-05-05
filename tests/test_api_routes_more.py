@@ -8,7 +8,7 @@ from src.api import (
 )
 from src.api.app import create_app
 from src.api.deps import get_pool
-from tests.helpers import signed_init_data
+from src.api.auth import create_access_token
 
 
 def _client():
@@ -19,7 +19,8 @@ def _client():
 
 
 def _headers():
-    return {"X-Telegram-Init-Data": signed_init_data()}
+    token = create_access_token({"sub": "test-manager"})
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_clients_routes(monkeypatch):
@@ -163,7 +164,7 @@ def test_analytics_and_settings_routes(monkeypatch):
 
     assert client.get("/api/analytics/dashboard?days=7", headers=_headers()).json()["total_orders"] == 1
     settings = client.get("/api/settings", headers=_headers()).json()
-    assert "webhook_url_client" in settings
+    assert "mini_app_url" in settings
 
 
 def test_api_requires_auth_header():

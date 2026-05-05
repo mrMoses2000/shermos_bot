@@ -202,7 +202,7 @@ async def test_manager_slot_proposal_saves_open_slot(monkeypatch, manager_db):
 
 @pytest.mark.asyncio
 async def test_notify_auto_confirmed_measurements(monkeypatch, manager_db):
-    monkeypatch.setattr(worker.settings, "manager_chat_ids", "99")
+    monkeypatch.setattr(worker.settings, "manager_whatsapp_numbers", "79001000099")
     scheduled_time = datetime.now(TZ) + timedelta(days=1)
     client_messages = []
 
@@ -215,7 +215,7 @@ async def test_notify_auto_confirmed_measurements(monkeypatch, manager_db):
     sender = FakeSender()
 
     async def fake_get_last_inbound_event(_pool, chat_id):
-        return {"channel": "telegram"}
+        return {"channel": "whatsapp", "external_chat_id": "123@s.whatsapp.net"}
 
     monkeypatch.setattr(worker.postgres, "get_last_inbound_event", fake_get_last_inbound_event)
 
@@ -227,9 +227,9 @@ async def test_notify_auto_confirmed_measurements(monkeypatch, manager_db):
 
     # Client confirmation goes via send_and_record
     assert any("автоматически подтверждён" in m["text"] for m in client_messages)
-    # Manager notifications go via outbox (insert_outbound_event) — captured in manager_db fixture
+    # Manager notifications go via WhatsApp outbox (insert_outbound_event) — captured in manager_db fixture
     assert any(
-        call[0] == "outbound" and call[1] == 99 and call[2] == "manager"
+        call[0] == "outbound" and call[2] == "manager"
         for call in manager_db
     )
 

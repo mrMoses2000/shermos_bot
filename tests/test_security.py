@@ -36,11 +36,14 @@ from src.api.auth import (
 )
 from src.api.app import create_app
 from src.api import routes_auth, routes_whatsapp
-from src.bot import webhook, whatsapp_ingress
+from src.bot import whatsapp_ingress
 from src.config import settings
 from src.db import postgres
 
 from tests.helpers import FakePool, FakeRedis, signed_init_data
+
+# Use a fixed test token for HMAC security regression tests
+_TEST_BOT_TOKEN = "manager-token"
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +52,7 @@ from tests.helpers import FakePool, FakeRedis, signed_init_data
 
 def _signed_init_data_raw(**payload_overrides) -> str:
     """Build a properly signed initData string, overriding default fields."""
-    bot_token = settings.manager_bot_token
+    bot_token = _TEST_BOT_TOKEN
     payload = {
         "auth_date": str(int(time.time())),
         "query_id": "test-query",
@@ -162,12 +165,12 @@ def test_init_data_with_invalid_hash_rejected():
     tampered = [p if not p.startswith("hash=") else "hash=deadbeef0000" for p in tampered]
     init_data = "&".join(tampered)
     with pytest.raises(ValueError, match="Invalid initData hash"):
-        validate_init_data(init_data, settings.manager_bot_token)
+        validate_init_data(init_data, _TEST_BOT_TOKEN)
 
 
 def test_init_data_with_missing_auth_date_rejected():
     """A2: initData without auth_date field must be rejected."""
-    bot_token = settings.manager_bot_token
+    bot_token = _TEST_BOT_TOKEN
     payload = {"query_id": "test"}
     data_check_string = "\n".join(f"{k}={payload[k]}" for k in sorted(payload))
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
@@ -181,14 +184,14 @@ def test_init_data_with_auth_date_zero_rejected():
     """A3: auth_date=0 must be rejected (Phase 2.3 fix)."""
     init_data = _signed_init_data_raw(auth_date="0")
     with pytest.raises(ValueError, match="Missing or invalid auth_date"):
-        validate_init_data(init_data, settings.manager_bot_token)
+        validate_init_data(init_data, _TEST_BOT_TOKEN)
 
 
 def test_init_data_with_garbage_auth_date_rejected():
     """A4: non-numeric auth_date must be rejected."""
     init_data = _signed_init_data_raw(auth_date="abc")
     with pytest.raises(ValueError):
-        validate_init_data(init_data, settings.manager_bot_token)
+        validate_init_data(init_data, _TEST_BOT_TOKEN)
 
 
 def test_init_data_with_old_auth_date_rejected():
@@ -196,13 +199,13 @@ def test_init_data_with_old_auth_date_rejected():
     old_ts = str(int(time.time()) - 2 * 86400)  # 2 days ago
     init_data = _signed_init_data_raw(auth_date=old_ts)
     with pytest.raises(ValueError, match="initData expired"):
-        validate_init_data(init_data, settings.manager_bot_token)
+        validate_init_data(init_data, _TEST_BOT_TOKEN)
 
 
 def test_init_data_with_current_auth_date_accepted():
     """A6: fresh properly-signed initData must be accepted without error."""
     init_data = signed_init_data()
-    result = validate_init_data(init_data, settings.manager_bot_token)
+    result = validate_init_data(init_data, _TEST_BOT_TOKEN)
     assert "auth_date" in result
 
 
@@ -449,53 +452,3 @@ def test_whatsapp_inbound_with_correct_secret_accepted(monkeypatch):
     assert resp.json()["ok"] is True
 
 
-# ===========================================================================
-# G. Telegram webhook secret
-# Detailed coverage: tests/test_webhook.py (Phase 2.4).
-# These are lightweight regression guards.
-# ===========================================================================
-
-class _FakeWebhookRequest:
-    def __init__(self, payload: dict, secret: str | None = None):
-        self.headers = {}
-        if secret is not None:
-            self.headers["X-Telegram-Bot-Api-Secret-Token"] = secret
-        self.app = {"pg_pool": object(), "redis": _FakeRedisForBridge()}
-        self._payload = payload
-
-    async def json(self):
-        return self._payload
-
-
-@pytest.mark.asyncio
-async def test_telegram_webhook_wrong_secret_returns_200_no_enqueue(monkeypatch):
-    """G23: wrong webhook secret → 200 OK but NO Redis enqueue (security-through-obscurity)."""
-
-    async def fail_if_reached(*_a):
-        raise AssertionError("DB should not be reached with wrong secret")
-
-    monkeypatch.setattr(webhook.postgres, "mark_update_received", fail_if_reached)
-    request = _FakeWebhookRequest(
-        {"update_id": 42, "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": "hi"}},
-        secret="WRONG",
-    )
-    response = await webhook._process_webhook(request, "client", "CORRECT")
-    assert response.status == 200
-    assert request.app["redis"].jobs == []
-
-
-@pytest.mark.asyncio
-async def test_telegram_webhook_no_secret_header_returns_200_no_enqueue(monkeypatch):
-    """G24: missing webhook secret header → 200 OK but NO Redis enqueue."""
-
-    async def fail_if_reached(*_a):
-        raise AssertionError("DB should not be reached with missing secret")
-
-    monkeypatch.setattr(webhook.postgres, "mark_update_received", fail_if_reached)
-    request = _FakeWebhookRequest(
-        {"update_id": 43, "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": "hi"}},
-        secret=None,  # header omitted entirely
-    )
-    response = await webhook._process_webhook(request, "client", "CORRECT")
-    assert response.status == 200
-    assert request.app["redis"].jobs == []

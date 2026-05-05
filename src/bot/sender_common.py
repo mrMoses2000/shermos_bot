@@ -6,7 +6,6 @@ from typing import Any
 from uuid import uuid4
 from src.config import settings
 from src.db import postgres
-from src.bot.telegram_sender import TelegramSender, telegram_sender
 from src.bot.whatsapp_sender import WhatsAppSender, whatsapp_sender, manager_whatsapp_sender
 from src.utils.logger import setup_logger
 
@@ -15,7 +14,7 @@ logger = setup_logger(__name__)
 
 async def send_and_record(
     pg_pool,
-    sender: TelegramSender | WhatsAppSender,
+    sender: WhatsAppSender,
     token: str,
     chat_id: int | str,
     text: str,
