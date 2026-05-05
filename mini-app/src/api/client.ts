@@ -18,7 +18,10 @@ import {
   setAccessToken,
 } from "../auth";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "";
+// Configurable API base URL for separate-deploy mode.
+// Empty string => same-origin (Mini App served by the backend, dev mode).
+// Absolute URL  => Netlify-deployed frontend hitting an external API.
+const API_BASE: string = import.meta.env.VITE_API_BASE_URL ?? "";
 
 /** Unified auth discriminator. */
 export type ApiAuth =

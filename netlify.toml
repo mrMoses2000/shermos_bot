@@ -1,0 +1,41 @@
+# Netlify build & routing config for Shermos frontend (Mini App + CMS).
+# Backend API stays on Ubuntu — set VITE_API_BASE_URL in Netlify UI to point at it.
+
+[build]
+  base = "mini-app"
+  command = "npm run build"
+  publish = "mini-app/dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# CMS — explicit entry point: /cms or /cms/anything → cms.html
+[[redirects]]
+  from = "/cms"
+  to = "/cms.html"
+  status = 200
+
+[[redirects]]
+  from = "/cms/*"
+  to = "/cms.html"
+  status = 200
+
+# Mini App — SPA fallback for everything else
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Security headers (kept minimal — Telegram needs iframe embedding, no X-Frame-Options)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "interest-cohort=()"
+
+# Long cache for hashed assets
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
