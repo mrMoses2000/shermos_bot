@@ -2,10 +2,12 @@
 
 ## Prerequisites
 
-- AWS Security Group: **port 88 open** (TCP, 0.0.0.0/0)
 - Server: `ssh aws-shermos1-frankfurt` (Ubuntu 24.04, user `ubuntu`)
 - Gemini CLI: authorized via OAuth (`gemini` → complete OAuth → Ctrl+C)
 - GitHub SSH key configured on server
+
+> **Telegram removed (2026-05-05):** No port 88 / self-signed cert / webhook registration needed.
+> Both client and manager bots run via WhatsApp only. CMS is served by Netlify.
 
 ## Environment Variables Reference
 
@@ -37,48 +39,34 @@ Run this **from your Mac**:
 scp /Users/mosesvasilenko/shermos-bot/.env ubuntu@3.79.24.73:~/shermos-bot/.env
 ```
 
-### 3. Pull latest and run deployment script
+Any stale `TELEGRAM_*` / `MANAGER_BOT_TOKEN` / `MANAGER_CHAT_IDS` keys in `.env` are
+silently ignored by pydantic-settings (`extra="ignore"`).
+
+### 3. Pull latest and restart services
 
 ```bash
 ssh aws-shermos1-frankfurt
 cd ~/shermos-bot
 git pull origin main
-chmod +x run.sh
-./run.sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m alembic upgrade head   # if migrations changed
+sudo systemctl restart shermos-worker shermos-api
+sudo systemctl is-active shermos-worker shermos-api
+sudo journalctl -u shermos-worker --since "1 min ago" -p info
 ```
-
-`run.sh` does everything automatically:
-1. Validates `.env` (checks tokens aren't `replace_me`)
-2. Installs Docker, Python deps, OpenGL libs
-3. Generates self-signed SSL certificate
-4. Starts PostgreSQL + Redis (Docker Compose)
-5. Creates Python venv + installs requirements
-6. Runs database migrations
-7. Seeds default prices & materials
-8. Registers Telegram webhooks (both bots)
-9. Creates + starts systemd services
-10. Health check
-
-Script is **idempotent** — safe to re-run after `git pull`.
 
 ### 4. Restart sequence (after `git pull`)
 
-Which services to restart depends on what changed (see REMEDIATION_PLAN.md §W-5):
+Which services to restart depends on what changed:
 
 | Changed files | Restart |
 |---|---|
 | `src/queue/worker.py`, `src/llm/*`, `src/engine/*` | `shermos-worker` |
-| `src/bot/webhook.py`, `src/db/*` | `shermos-webhook` + `shermos-worker` |
 | `src/api/*` | `shermos-api` |
 | `src/bot/whatsapp_ingress.py` | `shermos-worker` + `shermos-api` |
 | `whatsapp-bridge/**` | `shermos-wa-client` + `shermos-wa-manager` |
-| `mini-app/**` | `npm run build` → restart whichever service serves the SPA |
-
-```bash
-sudo systemctl restart shermos-webhook shermos-worker shermos-api
-sudo systemctl is-active shermos-webhook shermos-worker shermos-api
-sudo journalctl -u shermos-worker --since "1 min ago" -p info
-```
+| `mini-app/**` | push to Netlify (auto-builds on merge to main) |
 
 ### 5. Run integration tests (on server)
 
@@ -98,14 +86,14 @@ ssh aws-shermos1-frankfurt
 cd ~/shermos-bot
 git log --oneline -10                 # find the good SHA
 git checkout <good-sha>               # detached HEAD — services still run old code
-sudo systemctl restart shermos-worker shermos-webhook shermos-api
+sudo systemctl restart shermos-worker shermos-api
 ```
 
 ### Option B — Roll back to the prod-snapshot tag
 
 ```bash
 git checkout prod-snapshot-2026-05-04
-sudo systemctl restart shermos-worker shermos-webhook shermos-api
+sudo systemctl restart shermos-worker shermos-api
 ```
 
 ### Option C — Use git reflog (if you force-pushed or lost a commit)
@@ -117,16 +105,14 @@ git checkout <reflog-hash>
 
 After rollback, verify:
 ```bash
-sudo systemctl is-active shermos-worker shermos-webhook
-curl -k https://localhost:88/health
-curl http://localhost:88/metrics | grep shermos_
+sudo systemctl is-active shermos-worker shermos-api
+curl http://localhost:9443/api/health/bridges
 ```
 
 To return to a normal branch after detached-HEAD rollback:
 ```bash
 git checkout main
 git pull origin main
-./run.sh
 ```
 
 ---
@@ -134,9 +120,8 @@ git pull origin main
 ## Reading Logs & Metrics
 
 ```bash
-# Errors only (journald syslog priority filter — requires our <3>/<4> prefixes)
+# Errors only
 journalctl -u shermos-worker -p err
-journalctl -u shermos-webhook -p err
 journalctl -u shermos-api -p err
 
 # Warning and above
@@ -146,11 +131,11 @@ journalctl -u shermos-worker -p warning -f
 journalctl -u shermos-worker -f
 
 # Prometheus metrics
-curl http://localhost:88/metrics | grep shermos_
+curl http://localhost:9443/metrics | grep shermos_
 
 # Bridge health
 curl http://localhost:9443/api/health/bridges   # both WA bridges status
-curl -k https://localhost:88/health             # main API
+curl http://localhost:9443/health               # main API
 ```
 
 ---
@@ -167,7 +152,7 @@ curl -k https://localhost:88/health             # main API
 **What to check:**
 ```bash
 journalctl -u shermos-worker -p err -n 50
-curl http://localhost:88/metrics | grep llm_call_duration
+curl http://localhost:9443/metrics | grep llm_call_duration
 # Check Gemini OAuth token expiry on server
 gemini --version   # should succeed; if not, re-run OAuth
 ```
@@ -201,10 +186,10 @@ journalctl -u shermos-worker -p err -n 20
 2. Wait ~10 s for Postgres to accept connections: `docker compose exec postgres pg_isready`.
 3. Restart the Python services so they re-establish pools:
    ```bash
-   sudo systemctl restart shermos-worker shermos-webhook shermos-api
+   sudo systemctl restart shermos-worker shermos-api
    ```
 4. Data integrity check via outbox — any events that were `pending` during the outage will be retried automatically by `run_outbox_dispatcher` on the next tick (idempotent).
-5. Verify: `curl -k https://localhost:88/health` → `{"ok": true}`.
+5. Verify: `curl http://localhost:9443/health` → `{"ok": true}`.
 6. If Postgres volume is corrupted: restore from last snapshot / backup before restarting.
 
 ---
@@ -284,18 +269,17 @@ curl http://localhost:9443/api/health/bridges
 
 ```bash
 # Logs
-sudo journalctl -u shermos-webhook -f
 sudo journalctl -u shermos-worker -f
 sudo journalctl -u shermos-api -f
 docker compose logs -f
 
 # Restart services
-sudo systemctl restart shermos-webhook shermos-worker shermos-api
+sudo systemctl restart shermos-worker shermos-api
 
 # Status
-sudo systemctl status shermos-webhook shermos-worker shermos-api
-curl -k https://localhost:88/health
-curl http://localhost:88/metrics | grep shermos_
+sudo systemctl status shermos-worker shermos-api
+curl http://localhost:9443/health
+curl http://localhost:9443/metrics | grep shermos_
 curl http://localhost:9443/api/health/bridges
 ```
 
@@ -304,10 +288,9 @@ curl http://localhost:9443/api/health/bridges
 | Problem | Solution |
 |---|---|
 | `.env not found` | `scp` from Mac (see step 2) |
-| Webhook health check fails | Wait 5 s, retry. Check: `sudo journalctl -u shermos-webhook -n 30` |
-| Telegram webhook error | Port 88 not open in AWS Security Group |
 | Gemini CLI not found | `npm install -g @google/gemini-cli` then `gemini` for OAuth |
 | PostgreSQL connection refused | `docker compose ps` — check if postgres is running |
 | Permission denied (Docker) | Re-login after `sudo usermod -aG docker ubuntu` |
 | journalctl -p err returns nothing | Ensure `LOG_SYSLOG_PRIORITY=1` in `.env` (default: on) |
 | /metrics returns 404 | Check `shermos-api` is running; route is at `GET /metrics` (no auth) |
+| WA bridge not connecting | See Runbook 4 above |

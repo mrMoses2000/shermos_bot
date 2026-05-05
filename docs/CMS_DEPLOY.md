@@ -1,89 +1,86 @@
 # CMS Deployment Guide
 
+> Updated 2026-05-05. Telegram Mini App removed. Only the CMS browser entry remains.
+
 ## Build artifacts
 
-Running `npm run build` in `mini-app/` produces a multi-entry Vite build:
+Running `npm run build` in `mini-app/` produces a single-entry Vite build:
 
 ```
 mini-app/dist/
-  index.html          # Telegram Mini App entry
-  cms.html            # CMS browser entry (no Telegram SDK)
-  assets/             # shared JS/CSS chunks (content-hashed)
+  index.html          # CMS entry (no Telegram SDK)
+  assets/             # JS/CSS chunks (content-hashed)
 ```
 
 ## Routing requirements
 
-Both HTML files are standalone SPAs. The web server / CDN must route:
+`index.html` is a standalone SPA. The web server / CDN must serve it for all paths:
 
-| URL prefix | Serve file          | Notes                        |
-|------------|---------------------|------------------------------|
-| `/cms*`    | `dist/cms.html`     | All sub-paths → same file    |
-| `/`        | `dist/index.html`   | Telegram Mini App            |
-| `/assets/` | `dist/assets/`      | Static pass-through          |
+| URL prefix | Serve file        | Notes                     |
+|------------|-------------------|---------------------------|
+| `/assets/` | `dist/assets/`    | Static pass-through       |
+| `/*`       | `dist/index.html` | SPA fallback              |
 
-### Cloudflare Workers / Pages example
-
-Create a `_redirects` file (Cloudflare Pages) or a Worker route:
-
-```
-/cms/*    /cms.html    200
-/assets/* /assets/:splat 200
-/*        /index.html  200
-```
+This is already configured in `netlify.toml` for Netlify deployments.
 
 ### Nginx example
 
 ```nginx
 location /assets/ {
-    root /var/www/mini-app/dist;
-}
-location /cms {
-    try_files /cms.html =404;
+    root /var/www/cms/dist;
 }
 location / {
-    try_files /index.html =404;
+    try_files $uri /index.html;
 }
 ```
+
+## Netlify deployment
+
+The `netlify.toml` at the repo root configures automatic builds:
+
+```toml
+[build]
+  base = "mini-app"
+  command = "npm run build"
+  publish = "mini-app/dist"
+```
+
+Set `VITE_API_BASE_URL` in Netlify UI → Site settings → Environment variables
+to point at the backend API (e.g. `https://api.shermos.ru`).
+
+On every push to `main`, Netlify auto-builds and deploys the CMS.
 
 ## FastAPI backend — no change needed
 
-`src/api/app.py` does **not** mount static files; it is a pure API server.
-The Mini App and CMS are served as static files by the CDN / reverse proxy.
-The backend only needs to accept requests from the CMS origin in `CORS_ALLOWED_ORIGINS`.
+`src/api/app.py` is a pure API server; it does not serve static files.
+The CMS is served from Netlify. The backend only needs the CMS origin in
+`CORS_ALLOWED_ORIGINS`.
 
 ## Auth notes
 
-### CSRF cookie in CMS mode
+### CSRF cookie
 
 The `csrf_token` cookie is set by the backend with `SameSite=None; Secure`.
-This means:
 - It is **only accessible over HTTPS**. In local dev over plain `http://localhost`
   the cookie will not be set and `getCsrfToken()` will return `null`. This is
-  expected — the `/api/auth/refresh` endpoint only needs CSRF protection in
-  production where the cookie arrives from the browser.
-- Developers testing the CMS locally should use `mkcert` + `https://` or a
-  tunnel (e.g. `cloudflared tunnel`) to get a valid HTTPS context.
+  expected — `/api/auth/refresh` only needs CSRF protection in production.
+- Developers testing locally should use `mkcert` + `https://` or a tunnel
+  (e.g. `cloudflared tunnel`) to get a valid HTTPS context.
 
 ### Environment variable
 
-Set `VITE_API_BASE` at build time to point at the API origin if the frontend
-and API are on different domains:
+Set `VITE_API_BASE_URL` at build time if the frontend and API are on different domains:
 
 ```bash
-VITE_API_BASE=https://api.shermos.ru npm run build
+VITE_API_BASE_URL=https://api.shermos.ru npm run build
 ```
 
-If left empty, all `/api/*` requests go to the same origin (recommended when
-the reverse proxy forwards `/api/` to the FastAPI process).
+If left empty, all `/api/*` requests go to the same origin.
 
 ## Local development
 
 ```bash
 cd mini-app
 npm run dev
-# Open http://localhost:5173/         → Mini App (Telegram context needed)
-# Open http://localhost:5173/cms.html → CMS login
+# Open http://localhost:5173/ → CMS login
 ```
-
-In dev, Vite serves `cms.html` at `/cms.html`. In production the router maps
-`/cms*` → `cms.html`. Use the `.html` URL in dev only.

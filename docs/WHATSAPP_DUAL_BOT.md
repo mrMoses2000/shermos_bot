@@ -52,8 +52,8 @@ WhatsApp (Meta)
               │                                              │
               ▼                                              ▼
    send_and_record() через                       send_and_record() через
-   telegram_sender или                           manager_whatsapp_sender
-   whatsapp_sender                               (port 3002, role=manager)
+   whatsapp_sender                               manager_whatsapp_sender
+   (port 3001, role=client)                      (port 3002, role=manager)
 ```
 
 ## Семантика allowlist
@@ -96,7 +96,6 @@ WhatsApp (Meta)
 - `MANAGER_WHATSAPP_BRIDGE_URL` — URL менеджерского бриджа (по умолчанию `http://localhost:3002`)
 - `BRIDGE_SHARED_SECRET` — общий секрет для аутентификации бридж↔API
 - `MANAGER_WHATSAPP_NUMBERS` — список телефонов сотрудников, comma-separated, e164 без `+`
-- `MANAGER_CHAT_IDS` — список Telegram chat_id'ов менеджеров (для дублирования уведомлений в Telegram)
 
 ## Healthcheck
 

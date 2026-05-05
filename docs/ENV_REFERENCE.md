@@ -1,49 +1,27 @@
 # ENV_REFERENCE — Переменные окружения Shermos Bot
 
-> Автоматически составлено из `src/config.py` + systemd-юнитов на 2026-05-04.
+> Обновлено 2026-05-05. Telegram полностью удалён. Оба бота работают только через WhatsApp.
 > **Значения секретов не указаны.** Смотри `/etc/shermos/` или EnvironmentFile каждого юнита.
 
 ## Какой сервис использует какие переменные
 
-| Переменная | Telegram Worker | API | Webhook | WA Bridge (client) | WA Bridge (manager) |
-|---|---|---|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | ✓ | | ✓ | | |
-| `TELEGRAM_WEBHOOK_SECRET` | | | ✓ | | |
-| `MANAGER_BOT_TOKEN` | ✓ | | ✓ | | |
-| `MANAGER_WEBHOOK_SECRET` | | | ✓ | | |
-| `MANAGER_CHAT_IDS` | ✓ | | | | |
-| `POSTGRES_*` | ✓ | ✓ | ✓ | | |
-| `REDIS_URL` | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `BRIDGE_SHARED_SECRET` | ✓ | ✓ | | ✓ | ✓ |
-| `WHATSAPP_BRIDGE_URL` | ✓ | | | | |
-| `MANAGER_WHATSAPP_BRIDGE_URL` | ✓ | ✓ | | | |
-| `MANAGER_WHATSAPP_NUMBERS` | ✓ | | | | |
-| `JWT_SECRET` | | ✓ | | | |
-| `CMS_ADMIN_TOKEN` | | ✓ | | | |
-| `ASSEMBLYAI_API_KEY` | ✓ | | | | |
-| `BRIDGE_PORT` | | | | ✓ | ✓ |
-| `BRIDGE_ROLE` | | | | ✓ (=client) | ✓ (=manager) |
-| `BAILEYS_AUTH_PREFIX` | | | | ✓ | ✓ |
-| `INGRESS_URL` | | | | ✓ | ✓ |
+| Переменная | WA Worker | API | WA Bridge (client) | WA Bridge (manager) |
+|---|---|---|---|---|
+| `POSTGRES_*` | ✓ | ✓ | | |
+| `REDIS_URL` | ✓ | ✓ | ✓ | ✓ |
+| `BRIDGE_SHARED_SECRET` | ✓ | ✓ | ✓ | ✓ |
+| `WHATSAPP_BRIDGE_URL` | ✓ | | | |
+| `MANAGER_WHATSAPP_BRIDGE_URL` | ✓ | ✓ | | |
+| `MANAGER_WHATSAPP_NUMBERS` | ✓ | | | |
+| `JWT_SECRET` | | ✓ | | |
+| `CMS_ADMIN_TOKEN` | | ✓ | | |
+| `ASSEMBLYAI_API_KEY` | ✓ | | | |
+| `BRIDGE_PORT` | | | ✓ | ✓ |
+| `BRIDGE_ROLE` | | | ✓ (=client) | ✓ (=manager) |
+| `BAILEYS_AUTH_PREFIX` | | | ✓ | ✓ |
+| `INGRESS_URL` | | | ✓ | ✓ |
 
 ## Полный список переменных
-
-### Telegram
-
-| Имя | Обязательна | По умолчанию | Описание |
-|---|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | **да** | — | Токен клиентского Telegram-бота |
-| `TELEGRAM_WEBHOOK_SECRET` | **да** | — | X-Telegram-Bot-Api-Secret-Token для клиентского вебхука |
-| `MANAGER_BOT_TOKEN` | **да** | — | Токен менеджерского Telegram-бота |
-| `MANAGER_WEBHOOK_SECRET` | **да** | — | X-Telegram-Bot-Api-Secret-Token для менеджерского вебхука |
-| `MANAGER_CHAT_IDS` | нет | `""` | Comma-separated Telegram chat_id менеджеров |
-| `WEBHOOK_HOST` | нет | `0.0.0.0` | |
-| `WEBHOOK_PORT` | нет | `88` | |
-| `WEBHOOK_PUBLIC_URL` | нет | `https://3.79.24.73:88` | Публичный URL для регистрации вебхука |
-| `WEBHOOK_PATH_CLIENT` | нет | `/webhook/client` | |
-| `WEBHOOK_PATH_MANAGER` | нет | `/webhook/manager` | |
-| `SSL_CERT_PATH` | нет | `certs/webhook.pem` | |
-| `SSL_KEY_PATH` | нет | `certs/webhook.key` | |
 
 ### База данных
 
@@ -93,9 +71,8 @@
 | `OTP_EXPIRY_MINUTES` | нет | `10` | Время жизни OTP-кода в минутах |
 | `OTP_MAX_ATTEMPTS` | нет | `5` | Максимум неверных попыток до сброса OTP |
 | `OTP_RATE_LIMIT_1H` | нет | `10` | Максимум отправок OTP с одного номера в час |
-| `CORS_ALLOWED_ORIGINS` | нет | `""` | Comma-separated список разрешённых CORS-источников; e.g. `https://cms.shermos.example,https://t.me`. Пусто = блокировать все браузерные CORS-запросы. |
+| `CORS_ALLOWED_ORIGINS` | нет | `""` | Comma-separated список разрешённых CORS-источников; e.g. `https://cms.shermos.example`. Пусто = блокировать все браузерные CORS-запросы. |
 | `CMS_ADMIN_TOKEN` | нет | `""` | Статический токен для CMS-admin эндпоинтов |
-| `MINI_APP_URL` | нет | `""` | URL Telegram Mini App |
 
 ### Остальное
 
@@ -116,10 +93,10 @@
 
 | Юнит | EnvironmentFile |
 |---|---|
-| `shermos-worker` | нет (используется `.env` в CWD через `python-dotenv`) |
-| `shermos-webhook` | нет |
+| `shermos-worker` | нет (используется `.env` в CWD через `pydantic-settings`) |
 | `shermos-api` | нет |
 | `shermos-wa-client` | `~/shermos_bot/whatsapp-bridge/.env` |
 | `shermos-wa-manager` | `~/shermos_bot/whatsapp-bridge/.env.manager` |
 
-> Дополнительно: все Python-сервисы читают `shermos_bot/.env` через `pydantic-settings` при старте.
+> Все Python-сервисы читают `shermos_bot/.env` через `pydantic-settings` при старте.
+> Стейлые ключи Telegram в `.env` игнорируются (настройка `extra="ignore"`).
