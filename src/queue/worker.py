@@ -908,6 +908,39 @@ async def process_manager_job(
             phone = meas.get("client_phone", "") if meas else ""
             reply = f"Телефон клиента: {phone}" if phone else "Телефон не указан."
             await send_and_record(pg_pool, sender, "", job.chat_id, reply, bot_type="manager")
+        elif text.startswith("/codegen_dispatch") or text.startswith("/codegen"):
+            # Issue codegen prompts for every pending material change made
+            # via CMS. Master copies the resulting block(s) into Claude/Codex
+            # to update code/config to match the DB.
+            from src.utils.codegen_prompt import build_codegen_prompt
+            pending = await postgres.list_codegen_tasks(pg_pool, status="pending", limit=10)
+            if not pending:
+                await send_and_record(
+                    pg_pool, sender, "", job.chat_id,
+                    "Нет ожидающих codegen-задач. Все изменения CMS уже отражены в коде.",
+                    bot_type="manager",
+                )
+            else:
+                # Generate prompts and persist them as 'prompt_issued'.
+                prompts: list[str] = []
+                for task in pending:
+                    prompt_text = build_codegen_prompt(task)
+                    await postgres.mark_codegen_task(
+                        pg_pool, task["id"], status="prompt_issued",
+                        prompt_text=prompt_text,
+                    )
+                    prompts.append(prompt_text)
+                header = (
+                    f"<b>Готово {len(prompts)} codegen-промт(ов).</b> "
+                    "Скопируйте каждый блок целиком в Claude/Codex.\n\n"
+                )
+                # WhatsApp 4096-char limit per message — отправляем по одному.
+                await send_and_record(pg_pool, sender, "", job.chat_id, header, bot_type="manager")
+                for prompt_text in prompts:
+                    await send_and_record(
+                        pg_pool, sender, "", job.chat_id, f"<pre>{prompt_text}</pre>",
+                        bot_type="manager",
+                    )
         elif text.startswith("/measurements"):
             measurements = await postgres.list_measurements(pg_pool, upcoming_only=True, limit=10)
             from src.utils.datetime_format import fmt_local

@@ -889,12 +889,253 @@ async def seed_default_prices(pool) -> None:
         )
 
 
-async def get_materials(pool) -> list[dict[str, Any]]:
+def canonicalize_material_key(kind: str, name: str) -> str:
+    """Build the unique canonical_key for a material.
+
+    `kind` is one of frame/glass/work_type, `name` is the master-facing label.
+    Lower-cases the name and replaces non-letter/digit runs with `-`,
+    matching the SQL backfill in migration 025.
+    """
+    import re
+
+    slug = re.sub(r"[^a-zа-яё0-9]+", "-", name.strip().lower(), flags=re.UNICODE)
+    slug = slug.strip("-") or "noname"
+    return f"{kind.strip().lower()}:{slug}"
+
+
+async def get_materials(
+    pool, *, include_inactive: bool = False, kind: str | None = None
+) -> list[dict[str, Any]]:
+    where: list[str] = []
+    args: list[Any] = []
+    if not include_inactive:
+        where.append("is_active = true")
+    if kind:
+        args.append(kind)
+        where.append(f"kind = ${len(args)}")
+    sql = "SELECT * FROM materials"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY kind, id"
     return _rows_to_dicts(
-        await pool.fetch("SELECT * FROM materials ORDER BY kind, id"),
+        await pool.fetch(sql, *args),
         object_fields=("metadata",),
         array_fields=("color",),
     )
+
+
+async def search_materials(pool, query: str, *, limit: int = 5) -> list[dict[str, Any]]:
+    """Substring search by name/canonical_key. Used by the 'similar materials'
+    suggestion when the master is about to add a new one."""
+    if not query.strip():
+        return []
+    pattern = f"%{query.strip().lower()}%"
+    return _rows_to_dicts(
+        await pool.fetch(
+            """
+            SELECT * FROM materials
+             WHERE lower(name) LIKE $1 OR canonical_key LIKE $1
+             ORDER BY is_active DESC, kind, id
+             LIMIT $2
+            """,
+            pattern,
+            limit,
+        ),
+        object_fields=("metadata",),
+        array_fields=("color",),
+    )
+
+
+async def get_material_by_canonical_key(pool, canonical_key: str) -> dict[str, Any] | None:
+    row = await pool.fetchrow(
+        "SELECT * FROM materials WHERE canonical_key=$1", canonical_key
+    )
+    return _row_to_dict(row, object_fields=("metadata",), array_fields=("color",))
+
+
+async def set_material_active(
+    pool,
+    material_id: str,
+    is_active: bool,
+    *,
+    actor_phone: str | None = None,
+) -> dict[str, Any]:
+    """Soft-toggle is_active and write to material_history.
+
+    Returns the updated row. Raises ValueError if material doesn't exist.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                UPDATE materials
+                   SET is_active = $2,
+                       deactivated_at = CASE WHEN $2 THEN NULL ELSE now() END,
+                       updated_at = now()
+                 WHERE id = $1
+             RETURNING *
+                """,
+                material_id,
+                is_active,
+            )
+            if row is None:
+                raise ValueError(f"Material not found: {material_id}")
+            await conn.execute(
+                """
+                INSERT INTO material_history (material_id, action, actor_phone, payload)
+                VALUES ($1, $2, $3, '{}'::jsonb)
+                """,
+                material_id,
+                "restored" if is_active else "deactivated",
+                actor_phone,
+            )
+    return _row_to_dict(row, object_fields=("metadata",), array_fields=("color",)) or {}
+
+
+async def create_material_with_codegen(
+    pool,
+    *,
+    kind: str,
+    name: str,
+    color: list[float] | None,
+    roughness: float | None,
+    price_modifier: float | None,
+    metadata: dict[str, Any] | None,
+    actor_phone: str | None,
+) -> dict[str, Any]:
+    """Insert a new material from the master CMS.
+
+    Behavior:
+      - If canonical_key collides with an existing row, we restore that row
+        (is_active=true) instead of inserting a duplicate. Returns it with
+        a `_restored` marker so the API can tell the master.
+      - Otherwise INSERT with pending_codegen=true and queue a codegen_task.
+    """
+    canonical_key = canonicalize_material_key(kind, name)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            existing = await conn.fetchrow(
+                "SELECT * FROM materials WHERE canonical_key=$1 FOR UPDATE",
+                canonical_key,
+            )
+            if existing is not None:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE materials
+                       SET is_active = true,
+                           deactivated_at = NULL,
+                           updated_at = now()
+                     WHERE id = $1
+                 RETURNING *
+                    """,
+                    existing["id"],
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO material_history (material_id, action, actor_phone, payload)
+                    VALUES ($1, 'restored', $2, '{}'::jsonb)
+                    """,
+                    existing["id"],
+                    actor_phone,
+                )
+                result = _row_to_dict(row, object_fields=("metadata",), array_fields=("color",)) or {}
+                result["_restored"] = True
+                return result
+
+            new_id = f"{kind}_{uuid4().hex[:8]}"
+            row = await conn.fetchrow(
+                """
+                INSERT INTO materials
+                    (id, kind, name, color, roughness, metadata, price_modifier,
+                     canonical_key, is_active, pending_codegen, created_via)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7,
+                        $8, true, true, 'cms_master')
+            RETURNING *
+                """,
+                new_id,
+                kind,
+                name,
+                _json(color),
+                roughness,
+                _json(metadata or {}),
+                price_modifier,
+                canonical_key,
+            )
+            await conn.execute(
+                """
+                INSERT INTO material_history (material_id, action, actor_phone, payload)
+                VALUES ($1, 'created', $2, $3::jsonb)
+                """,
+                new_id,
+                actor_phone,
+                _json({
+                    "kind": kind,
+                    "name": name,
+                    "color": color,
+                    "roughness": roughness,
+                    "price_modifier": price_modifier,
+                }),
+            )
+            await conn.execute(
+                """
+                INSERT INTO codegen_tasks (kind, material_id, spec, actor_phone, status)
+                VALUES ('add_material', $1, $2::jsonb, $3, 'pending')
+                """,
+                new_id,
+                _json({
+                    "material_kind": kind,
+                    "name": name,
+                    "color": color,
+                    "roughness": roughness,
+                    "price_modifier": price_modifier,
+                    "metadata": metadata or {},
+                }),
+                actor_phone,
+            )
+            result = _row_to_dict(row, object_fields=("metadata",), array_fields=("color",)) or {}
+            result["_restored"] = False
+            return result
+
+
+async def list_codegen_tasks(
+    pool, *, status: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
+    sql = "SELECT * FROM codegen_tasks"
+    args: list[Any] = []
+    if status:
+        args.append(status)
+        sql += f" WHERE status=${len(args)}"
+    args.append(limit)
+    sql += f" ORDER BY created_at DESC LIMIT ${len(args)}"
+    return _rows_to_dicts(await pool.fetch(sql, *args), object_fields=("spec",))
+
+
+async def mark_codegen_task(
+    pool,
+    task_id: int,
+    *,
+    status: str,
+    prompt_text: str | None = None,
+    commit_sha: str | None = None,
+) -> dict[str, Any] | None:
+    valid = {"pending", "prompt_issued", "merged", "cancelled"}
+    if status not in valid:
+        raise ValueError(f"Invalid codegen task status: {status}")
+    fragments = ["status = $2"]
+    args: list[Any] = [task_id, status]
+    if prompt_text is not None:
+        args.append(prompt_text)
+        fragments.append(f"prompt_text = ${len(args)}")
+    if status == "prompt_issued":
+        fragments.append("issued_at = now()")
+    if commit_sha is not None:
+        args.append(commit_sha)
+        fragments.append(f"commit_sha = ${len(args)}")
+    if status in {"merged", "cancelled"}:
+        fragments.append("resolved_at = now()")
+    sql = f"UPDATE codegen_tasks SET {', '.join(fragments)} WHERE id=$1 RETURNING *"
+    row = await pool.fetchrow(sql, *args)
+    return _row_to_dict(row, object_fields=("spec",))
 
 
 async def update_material(pool, material_id: str, **fields: Any) -> dict[str, Any]:
@@ -932,19 +1173,24 @@ async def seed_default_materials(pool) -> None:
             price_modifier = 1.0
             if db_kind == "frame" and str(material_id) not in {"1", "3"}:
                 price_modifier = 1.04
+            name = data.get("name", material_id)
             await pool.execute(
                 """
-                INSERT INTO materials (id, kind, name, color, roughness, metadata, price_modifier)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
-                ON CONFLICT DO NOTHING
+                INSERT INTO materials
+                    (id, kind, name, color, roughness, metadata, price_modifier,
+                     canonical_key, is_active, pending_codegen, created_via)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7,
+                        $8, true, false, 'seed')
+                ON CONFLICT (id) DO NOTHING
                 """,
                 f"{db_kind}_{material_id}",
                 db_kind,
-                data.get("name", material_id),
+                name,
                 _json(data.get("color")),
                 data.get("roughness"),
                 _json({"source_id": material_id}),
                 price_modifier,
+                canonicalize_material_key(db_kind, name),
             )
 
 

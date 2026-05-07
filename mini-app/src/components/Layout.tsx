@@ -8,6 +8,7 @@ const nav: Array<{ id: string; label: string }> = [
   { id: "measurements", label: "Замеры" },
   { id: "gallery",      label: "Галерея" },
   { id: "pricing",      label: "Цены" },
+  { id: "materials",    label: "Материалы" },
   { id: "settings",     label: "Настройки" },
   { id: "status",       label: "Статус" },
 ];

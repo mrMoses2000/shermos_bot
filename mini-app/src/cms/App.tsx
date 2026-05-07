@@ -5,6 +5,7 @@ import Orders from "../pages/Orders";
 import Clients from "../pages/Clients";
 import Measurements from "../pages/Measurements";
 import PricingEditor from "../pages/PricingEditor";
+import Materials from "../pages/Materials";
 import Settings from "../pages/Settings";
 import Gallery from "../pages/Gallery";
 import { clearAuth, getAccessToken } from "../auth";
@@ -16,6 +17,7 @@ export type Page =
   | "clients"
   | "measurements"
   | "pricing"
+  | "materials"
   | "gallery"
   | "settings";
 
@@ -44,6 +46,7 @@ export default function CmsApp() {
     if (page === "clients") return <Clients initData={CMS_AUTH} />;
     if (page === "measurements") return <Measurements initData={CMS_AUTH} />;
     if (page === "pricing") return <PricingEditor initData={CMS_AUTH} />;
+    if (page === "materials") return <Materials initData={CMS_AUTH} />;
     if (page === "gallery") return <Gallery initData={CMS_AUTH} />;
     if (page === "settings") return <Settings initData={CMS_AUTH} />;
     return <Dashboard initData={CMS_AUTH} />;

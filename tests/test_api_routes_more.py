@@ -134,7 +134,7 @@ def test_pricing_routes(monkeypatch):
     async def fake_update_price(_pool, price_id, **fields):
         return {"id": price_id, **fields}
 
-    async def fake_get_materials(_pool):
+    async def fake_get_materials(_pool, *, include_inactive=False, kind=None):
         return [{"id": "glass_1"}]
 
     async def fake_update_material(_pool, material_id, **fields):

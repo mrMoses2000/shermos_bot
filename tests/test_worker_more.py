@@ -96,6 +96,89 @@ async def test_manager_job_orders_and_status(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manager_codegen_dispatch_emits_prompts(monkeypatch):
+    """/codegen_dispatch should issue one prompt per pending task and
+    transition each task to status=prompt_issued."""
+    calls = []
+    state = {"tasks": [
+        {"id": 11, "kind": "add_material", "material_id": "glass_x", "spec": {}},
+        {"id": 12, "kind": "remove_material", "material_id": "frame_y", "spec": {}},
+    ]}
+
+    async def fake_mark_status(_pool, update_id, status, error=None):
+        calls.append(("status", update_id, status))
+
+    async def fake_insert_outbound(*_args, **kwargs):
+        calls.append(("outbound", kwargs.get("bot_type")))
+        return 1
+
+    async def fake_mark_sent(_pool, event_id, telegram_message_id=None):
+        calls.append(("sent", event_id, telegram_message_id))
+
+    async def fake_get_status(*_a, **_kw):
+        return None
+
+    async def fake_list_codegen_tasks(_pool, *, status=None, limit=50):
+        if status == "pending":
+            return list(state["tasks"])
+        return []
+
+    issued = []
+    async def fake_mark_codegen_task(_pool, task_id, *, status, prompt_text=None, commit_sha=None):
+        issued.append((task_id, status, bool(prompt_text)))
+        return {"id": task_id, "status": status, "prompt_text": prompt_text}
+
+    monkeypatch.setattr(worker.postgres, "get_update_status", fake_get_status)
+    monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
+    monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound)
+    monkeypatch.setattr(worker.postgres, "mark_outbound_sent", fake_mark_sent)
+    monkeypatch.setattr(worker.postgres, "list_codegen_tasks", fake_list_codegen_tasks)
+    monkeypatch.setattr(worker.postgres, "mark_codegen_task", fake_mark_codegen_task)
+    sender = FakeSender()
+
+    await worker.process_manager_job(
+        Job(update_id=42, chat_id=99, user_id=99, text="/codegen_dispatch", bot_type="manager"),
+        object(),
+        FakeRedis(),
+        sender,
+    )
+
+    # Two pending tasks → two prompt messages + the header
+    text_msgs = [m["text"] for m in sender.messages]
+    assert any("codegen-промт(ов)" in t for t in text_msgs)
+    assert any("Codegen task #11" in t for t in text_msgs)
+    assert any("Codegen task #12" in t for t in text_msgs)
+    # Both tasks must be marked prompt_issued with non-empty prompt_text
+    assert sorted(issued) == [(11, "prompt_issued", True), (12, "prompt_issued", True)]
+
+
+@pytest.mark.asyncio
+async def test_manager_codegen_dispatch_handles_empty_queue(monkeypatch):
+    async def fake_mark_status(*_a, **_kw): pass
+    async def fake_insert_outbound(*_a, **_kw): return 1
+    async def fake_mark_sent(*_a, **_kw): pass
+    async def fake_get_status(*_a, **_kw): return None
+    async def fake_list_codegen_tasks(_pool, *, status=None, limit=50): return []
+
+    monkeypatch.setattr(worker.postgres, "get_update_status", fake_get_status)
+    monkeypatch.setattr(worker.postgres, "mark_update_status", fake_mark_status)
+    monkeypatch.setattr(worker.postgres, "insert_outbound_event", fake_insert_outbound)
+    monkeypatch.setattr(worker.postgres, "mark_outbound_sent", fake_mark_sent)
+    monkeypatch.setattr(worker.postgres, "list_codegen_tasks", fake_list_codegen_tasks)
+    sender = FakeSender()
+
+    await worker.process_manager_job(
+        Job(update_id=43, chat_id=99, user_id=99, text="/codegen", bot_type="manager"),
+        object(),
+        FakeRedis(),
+        sender,
+    )
+    # Single explanatory message, no prompt blocks
+    assert len(sender.messages) == 1
+    assert "Нет ожидающих" in sender.messages[0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_manager_whatsapp_job_uses_manager_whatsapp_sender(monkeypatch):
     calls = []
 
