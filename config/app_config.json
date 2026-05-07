@@ -11,7 +11,8 @@
     "image_height": 720,
     "supersample_factor": 1,
     "output_directory": "data/results",
-    "angles_for_complex_shapes": [0, 90, 180, 270]
+    "angles_for_complex_shapes": [0, 90, 180, 270],
+    "scene_theme": "light_studio"
   },
   "constraints": {
     "height": {

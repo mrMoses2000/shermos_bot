@@ -48,6 +48,77 @@ if sys.platform.startswith('linux'):
 
 # Удалены функции ввода пользователя, этот файл ожидает данные через JSON-конфигурацию
 
+# --- Scene themes ----------------------------------------------------------
+# Палитра + интенсивности света для разных «сред». Тёмная — историческое
+# поведение; light_studio — нейтрально-светлая среда, подходит для
+# презентационных рендеров на CMS / в галерее.
+_SCENE_THEMES = {
+    "dark_studio": {
+        "bg_color": [0.10, 0.10, 0.15, 1.0],
+        "ambient": [0.20, 0.20, 0.20],
+        "lights": {
+            "key_color":  [1.00, 0.90, 0.80], "key_intensity":  5.0,
+            "fill_color": [0.80, 0.85, 1.00], "fill_intensity": 2.5,
+            "rim_color":  [1.00, 1.00, 1.00], "rim_intensity":  4.0,
+        },
+        # Тёмный фон — пол не нужен, перегородка читается сама.
+        "floor": None,
+    },
+    "light_studio": {
+        # Холодный нейтрально-светлый «cyclorama» (фон фотостудии).
+        "bg_color": [0.93, 0.94, 0.96, 1.0],
+        # Поднимаем ambient: на светлом фоне тёмные ambient-значения
+        # делают перегородку «грязной».
+        "ambient": [0.45, 0.45, 0.48],
+        "lights": {
+            # Ниже интенсивности — иначе металлическая рама пересвечивается
+            # на светлом фоне и теряет фактуру.
+            "key_color":  [1.00, 0.96, 0.92], "key_intensity":  3.5,
+            "fill_color": [0.90, 0.92, 1.00], "fill_intensity": 1.6,
+            "rim_color":  [1.00, 1.00, 1.00], "rim_intensity":  2.5,
+        },
+        # Тонкий нейтрально-серый «пол» под перегородкой даёт контраст
+        # для прозрачных стёкол — без него стекло сливается с фоном.
+        "floor": {
+            "color": [0.78, 0.80, 0.83, 1.0],
+            "thickness": 0.005,   # практически плоскость
+            "padding": 0.6,       # на сколько метров расширить пол за габариты
+        },
+    },
+}
+
+
+def _get_scene_theme(name):
+    """Безопасный геттер темы — неизвестное имя падает на dark_studio."""
+    return _SCENE_THEMES.get(name) or _SCENE_THEMES["dark_studio"]
+
+
+def _build_studio_floor(frame_mesh, floor_cfg):
+    """Плоский «пол» под перегородкой для светлой темы.
+
+    Возвращает trimesh-меш или None, если не удалось вычислить bounds
+    (рендер всё равно пройдёт — пол это декоративный элемент).
+    """
+    try:
+        bounds = frame_mesh.bounds  # shape (2, 3): [min, max]
+        min_xyz = bounds[0]
+        max_xyz = bounds[1]
+        pad = float(floor_cfg.get("padding", 0.5))
+        thickness = float(floor_cfg.get("thickness", 0.005))
+        width = float(max_xyz[0] - min_xyz[0]) + pad * 2.0
+        depth = float(max_xyz[2] - min_xyz[2]) + pad * 2.0
+        # Trimesh box использует extents=(x,y,z), пол лежит горизонтально.
+        floor = trimesh.creation.box(extents=(width, thickness, depth))
+        # Сдвигаем пол так, чтобы его верхняя плоскость была на уровне нижней
+        # точки рамы.
+        cx = (min_xyz[0] + max_xyz[0]) * 0.5
+        cz = (min_xyz[2] + max_xyz[2]) * 0.5
+        floor.apply_translation((cx, float(min_xyz[1]) - thickness * 0.5, cz))
+        return floor
+    except Exception:
+        return None
+
+
 def _create_handle(handle_style, handle_position, width, height, door='Основная дверь',
                     section_bounds=None, *, handle_side: str = "inside"):
     """Создает геометрию для дверной ручки.
@@ -732,11 +803,25 @@ def render_scene(frame_mesh, glass_mesh, params, handle_mesh=None, y_rotation_de
         roughnessFactor=0.1
     )
 
-    # Настройка сцены
-    scene = pyrender.Scene(ambient_light=[0.2, 0.2, 0.2], bg_color=[0.1, 0.1, 0.15, 1.0])
+    # Настройка сцены — выбор темы (dark_studio по умолчанию для обратной совместимости)
+    scene_theme = config.get("rendering.scene_theme", "dark_studio")
+    theme = _get_scene_theme(scene_theme)
+    scene = pyrender.Scene(ambient_light=theme["ambient"], bg_color=theme["bg_color"])
     scene.add(pyrender.Mesh.from_trimesh(frame_mesh, material=frame_material))
     scene.add(pyrender.Mesh.from_trimesh(glass_mesh, material=glass_material))
-    
+
+    # На светлом фоне без контактного «пола» прозрачное стекло сливается с
+    # фоном и его контуры теряются. Добавляем нейтральный пол под перегородкой.
+    if theme.get("floor"):
+        floor_mesh = _build_studio_floor(frame_mesh, theme["floor"])
+        if floor_mesh is not None:
+            floor_material = pyrender.MetallicRoughnessMaterial(
+                baseColorFactor=theme["floor"]["color"],
+                metallicFactor=0.0,
+                roughnessFactor=0.95,
+            )
+            scene.add(pyrender.Mesh.from_trimesh(floor_mesh, material=floor_material))
+
     if handle_mesh is not None:
         scene.add(pyrender.Mesh.from_trimesh(handle_mesh, material=handle_material))
 
@@ -785,22 +870,23 @@ def render_scene(frame_mesh, glass_mesh, params, handle_mesh=None, y_rotation_de
 
     scene.add(camera, pose=camera_pose)
 
-    # Профессиональное студийное освещение (3-точечное)
-    
+    # Профессиональное студийное освещение (3-точечное), интенсивности — из темы
+    lights = theme["lights"]
+
     # 1. Key Light (Основной) - теплый, справа-сверху
-    key_light = pyrender.DirectionalLight(color=[1.0, 0.9, 0.8], intensity=5.0)
+    key_light = pyrender.DirectionalLight(color=lights["key_color"], intensity=lights["key_intensity"])
     key_pose = trimesh.transformations.rotation_matrix(np.radians(-45), [1, 0, 0]) @ \
                trimesh.transformations.rotation_matrix(np.radians(45), [0, 1, 0])
     scene.add(key_light, pose=key_pose)
 
     # 2. Fill Light (Заполняющий) - холодный, слева
-    fill_light = pyrender.DirectionalLight(color=[0.8, 0.85, 1.0], intensity=2.5)
+    fill_light = pyrender.DirectionalLight(color=lights["fill_color"], intensity=lights["fill_intensity"])
     fill_pose = trimesh.transformations.rotation_matrix(np.radians(-30), [1, 0, 0]) @ \
                 trimesh.transformations.rotation_matrix(np.radians(-60), [0, 1, 0])
     scene.add(fill_light, pose=fill_pose)
 
     # 3. Rim Light (Контровой) - яркий белый, сзади-сверху для выделения контуров
-    rim_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=4.0)
+    rim_light = pyrender.DirectionalLight(color=lights["rim_color"], intensity=lights["rim_intensity"])
     rim_pose = trimesh.transformations.rotation_matrix(np.radians(-135), [0, 1, 0]) @ \
                trimesh.transformations.rotation_matrix(np.radians(-30), [1, 0, 0])
     scene.add(rim_light, pose=rim_pose)
