@@ -173,25 +173,70 @@ export async function apiUpload<T>(
 
 // ─── CMS-specific: unauthenticated endpoints ─────────────────────────────────
 
+/**
+ * Error thrown by `requestOtp`/`verifyOtp` on non-2xx responses or transport
+ * failures. Carries the HTTP status (0 means network/CORS failure) and a
+ * best-effort `detail` string from the server's JSON body.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+  constructor(status: number, detail: string) {
+    super(detail || `HTTP ${status}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function readErrorDetail(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    if (!text) return "";
+    try {
+      const data = JSON.parse(text) as { detail?: string | unknown; message?: string };
+      if (typeof data.detail === "string") return data.detail;
+      if (typeof data.message === "string") return data.message;
+    } catch {
+      /* not JSON — fall through to text */
+    }
+    return text.slice(0, 200);
+  } catch {
+    return "";
+  }
+}
+
+async function postUnauthed(path: string, body: unknown, withCredentials = false): Promise<Response> {
+  try {
+    return await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      credentials: withCredentials ? "include" : "omit",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    // Most commonly: CORS preflight reject, mixed-content block, DNS failure.
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new ApiError(0, `Сеть недоступна или CORS заблокирован: ${msg}`);
+  }
+}
+
 /** Request a WhatsApp OTP for the given phone number. */
 export async function requestOtp(phone: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/auth/otp/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone }),
-  });
-  if (!res.ok) throw new Error(`OTP request failed: ${res.status}`);
+  const res = await postUnauthed("/api/auth/otp/send", { phone });
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    throw new ApiError(res.status, detail);
+  }
 }
 
 /** Verify the OTP and return the access token. */
 export async function verifyOtp(phone: string, otp: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/auth/otp/verify`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone, code: otp }),
-  });
-  if (!res.ok) throw new Error(`OTP verify failed: ${res.status}`);
+  const res = await postUnauthed("/api/auth/otp/verify", { phone, code: otp }, true);
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    throw new ApiError(res.status, detail);
+  }
   const data = (await res.json()) as { access_token: string };
   return data.access_token;
 }

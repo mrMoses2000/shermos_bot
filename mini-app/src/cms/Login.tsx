@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { requestOtp, verifyOtp } from "../api/client";
+import { ApiError, requestOtp, verifyOtp } from "../api/client";
 import { setAccessToken } from "../auth";
 
 interface LoginProps {
@@ -7,6 +7,46 @@ interface LoginProps {
 }
 
 type Step = "phone" | "otp";
+
+/**
+ * Strip everything except digits and a leading `+`.
+ * Empty result => not a usable phone.
+ */
+export function normalizePhoneInput(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const hasPlus = trimmed.startsWith("+");
+  const digits = trimmed.replace(/\D+/g, "");
+  if (!digits) return "";
+  return hasPlus ? `+${digits}` : digits;
+}
+
+/**
+ * Convert ApiError / unknown into a Russian, user-actionable message.
+ * Includes the HTTP status when present so support can diagnose without devtools.
+ */
+export function describeApiError(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) {
+    if (err.status === 0) {
+      return `${fallback} (сервер недоступен или CORS блокирует домен фронта)`;
+    }
+    if (err.status === 429) {
+      return `Слишком много попыток. Подождите минуту и повторите. (HTTP 429: ${err.detail})`;
+    }
+    if (err.status === 400) {
+      return `Неверный формат данных: ${err.detail || "проверьте номер."} (HTTP 400)`;
+    }
+    if (err.status === 401) {
+      return `Не авторизовано: ${err.detail || "код не подходит."} (HTTP 401)`;
+    }
+    if (err.status >= 500) {
+      return `Сервер ответил ошибкой ${err.status}. Попробуйте через минуту.`;
+    }
+    return `${fallback} (HTTP ${err.status}: ${err.detail || "без деталей"})`;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return `${fallback} (${msg})`;
+}
 
 export default function Login({ onSuccess }: LoginProps) {
   const [step, setStep] = useState<Step>("phone");
@@ -17,18 +57,19 @@ export default function Login({ onSuccess }: LoginProps) {
 
   const handleSendOtp = async (e: FormEvent) => {
     e.preventDefault();
-    const cleaned = phone.trim();
-    if (!cleaned) {
+    const normalized = normalizePhoneInput(phone);
+    if (!normalized) {
       setError("Введите номер телефона.");
       return;
     }
     setLoading(true);
     setError("");
     try {
-      await requestOtp(cleaned);
+      await requestOtp(normalized);
+      setPhone(normalized);
       setStep("otp");
-    } catch {
-      setError("Не удалось отправить код. Проверьте номер и попробуйте снова.");
+    } catch (err) {
+      setError(describeApiError(err, "Не удалось отправить код."));
     } finally {
       setLoading(false);
     }
@@ -44,11 +85,11 @@ export default function Login({ onSuccess }: LoginProps) {
     setLoading(true);
     setError("");
     try {
-      const token = await verifyOtp(phone.trim(), code);
+      const token = await verifyOtp(phone, code);
       setAccessToken(token);
       onSuccess();
-    } catch {
-      setError("Неверный или просроченный код. Попробуйте ещё раз.");
+    } catch (err) {
+      setError(describeApiError(err, "Неверный или просроченный код."));
     } finally {
       setLoading(false);
     }
@@ -71,7 +112,7 @@ export default function Login({ onSuccess }: LoginProps) {
                 className="form-input"
                 type="tel"
                 autoComplete="tel"
-                placeholder="+7 900 000 00 00"
+                placeholder="+7 700 000 00 00"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 disabled={loading}
