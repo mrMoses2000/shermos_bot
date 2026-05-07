@@ -256,9 +256,18 @@ async def test_render_timeout_kills_subprocess(monkeypatch, tmp_path):
 
     class Settings:
         renders_dir = str(tmp_path)
+        # The new render_engine reads timeout from settings; keep it tiny
+        # so the test stays sub-second.
+        render_timeout_seconds = 0.01
+
+    class _Stream:
+        async def read(self, _n=-1):
+            return b""
 
     class Process:
         pid = 123
+        returncode = None
+        stderr = _Stream()
 
         async def communicate(self):
             await asyncio.sleep(1)
@@ -270,7 +279,6 @@ async def test_render_timeout_kills_subprocess(monkeypatch, tmp_path):
     async def fake_create_subprocess_exec(*_args, **_kwargs):
         return Process()
 
-    monkeypatch.setattr(render_engine, "_RENDER_TIMEOUT", 0.01)
     monkeypatch.setattr(render_engine.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
     monkeypatch.setattr(render_engine.os, "getpgid", lambda pid: pid)
     monkeypatch.setattr(render_engine.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))

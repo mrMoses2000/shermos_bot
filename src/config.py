@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     send_typing_indicator: bool = True
     max_context_messages: int = 20
     render_cache_ttl_seconds: int = 3600
+    # Hard ceiling for the 3D-render subprocess. Default 300s covers the
+    # heaviest П-shape niche (3 walls × multi-section) on cold-start;
+    # tunable via RENDER_TIMEOUT_SECONDS without a redeploy.
+    render_timeout_seconds: int = 300
+    # If a render exceeds this, we send the user an interim "working on it"
+    # message so the chat does not feel stuck. Set to 0 to disable.
+    render_progress_notify_after_seconds: int = 30
 
     mini_app_url: str = ""
     cms_admin_token: str = ""

@@ -109,6 +109,48 @@ async def _get_memory_best_effort(pg_pool, chat_id: int) -> dict[str, Any] | Non
         return None
 
 
+def _start_render_progress_watchdog(
+    parsed_actions,
+    pg_pool,
+    sender: WhatsAppSender,
+    chat_id: int,
+    settings,
+) -> "asyncio.Task[None] | None":
+    """If the LLM asked for a render, schedule an interim message.
+
+    Returns the task so the caller can cancel it once apply_actions is
+    done. Returns None if no render is pending or if the feature is
+    disabled (`render_progress_notify_after_seconds <= 0`).
+    """
+    actions = getattr(parsed_actions, "actions", None) or {}
+    if not actions.get("render_partition"):
+        return None
+    delay = getattr(settings, "render_progress_notify_after_seconds", 0)
+    if not delay or delay <= 0:
+        return None
+
+    async def _notify_after_delay():
+        try:
+            await asyncio.sleep(delay)
+            await send_and_record(
+                pg_pool,
+                sender,
+                "",
+                chat_id,
+                "Готовлю 3D-визуализацию. Сложные формы (Г/П, много секций) "
+                "могут занять до 2-3 минут — не закрывайте чат.",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # best-effort, must never break the main flow
+            logger.warning(
+                "render_progress_notify_failed",
+                extra={"chat_id": chat_id, "error": str(exc)},
+            )
+
+    return asyncio.create_task(_notify_after_delay())
+
+
 def _telegram_user(job: Job) -> tuple[str, str]:
     message = job.raw_update.get("message") or {}
     user = message.get("from") or {}
@@ -473,7 +515,20 @@ async def process_client_job(
         )
         raw_llm = await call_llm(prompt)
         parsed = parse_actions(raw_llm)
-        action_result = await apply_actions(parsed, job.chat_id, client, state, pg_pool, redis_client, settings)
+
+        # If LLM asked to render, kick off a watchdog task that warns the
+        # user after `render_progress_notify_after_seconds` so the chat
+        # does not feel stuck on heavy П-/Г-shapes.
+        progress_task = _start_render_progress_watchdog(
+            parsed, pg_pool, sender, job.chat_id, settings
+        )
+        try:
+            action_result = await apply_actions(
+                parsed, job.chat_id, client, state, pg_pool, redis_client, settings
+            )
+        finally:
+            if progress_task is not None:
+                progress_task.cancel()
 
         await send_and_record(
             pg_pool,

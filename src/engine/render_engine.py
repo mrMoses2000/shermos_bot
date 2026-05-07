@@ -4,19 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
+from src.config import settings as _settings
 from src.engine.pricing_cache import pricing_cache
 from src.models import RenderPartitionAction
 from src.utils.config_manager import config
 from src.utils.query_parser import normalize_render_params
 
-_RENDER_TIMEOUT = 120
+logger = logging.getLogger(__name__)
+
+# Default lives in src/config.py (Settings.render_timeout_seconds, default 300).
+# Kept here as a module-level fallback so call sites that pass a settings
+# object override it cleanly.
+_DEFAULT_RENDER_TIMEOUT = 300
 
 
 def _render_params(params: RenderPartitionAction) -> dict[str, Any]:
@@ -105,6 +113,22 @@ from src.utils.config_manager import config
 
 generate_from_params(params, {{"materials": config.get_section("materials")}})
 """
+    timeout = getattr(settings, "render_timeout_seconds", None) or _DEFAULT_RENDER_TIMEOUT
+
+    logger.info(
+        "render_started",
+        extra={
+            "request_id": request_id,
+            "shape": render_params.get("shape"),
+            "sections": render_params.get("sections"),
+            "rows": render_params.get("rows"),
+            "cols": render_params.get("cols"),
+            "height": render_params.get("height"),
+            "width": render_params.get("width"),
+            "timeout": timeout,
+        },
+    )
+    started_at = time.monotonic()
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
@@ -115,21 +139,57 @@ generate_from_params(params, {{"materials": config.get_section("materials")}})
         env={**os.environ, "PYOPENGL_PLATFORM": "egl"},
     )
     try:
-        _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=_RENDER_TIMEOUT)
+        _stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
+        elapsed = time.monotonic() - started_at
+        # Best-effort: drain whatever the renderer wrote so the timeout
+        # is debuggable instead of a black box. Keep this short — we are
+        # already past budget.
+        partial_stderr = b""
+        if process.stderr is not None:
+            try:
+                partial_stderr = await asyncio.wait_for(process.stderr.read(2048), timeout=1.0)
+            except (asyncio.TimeoutError, Exception):
+                partial_stderr = b""
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)
         except ProcessLookupError:
             pass
         await process.wait()
-        raise TimeoutError(f"3D render timed out after {_RENDER_TIMEOUT}s")
+        logger.error(
+            "render_timeout",
+            extra={
+                "request_id": request_id,
+                "elapsed": round(elapsed, 1),
+                "timeout": timeout,
+                "stderr_tail": partial_stderr.decode("utf-8", errors="ignore")[-500:],
+            },
+        )
+        raise TimeoutError(f"3D render timed out after {timeout}s (elapsed={elapsed:.1f}s)")
 
+    elapsed = time.monotonic() - started_at
     if process.returncode != 0:
         error_text = stderr.decode("utf-8", errors="ignore")[:500]
+        logger.error(
+            "render_failed",
+            extra={"request_id": request_id, "elapsed": round(elapsed, 1), "stderr_tail": error_text},
+        )
         raise RuntimeError(f"Renderer failed: {error_text}")
 
     params_file.unlink(missing_ok=True)
     render_paths = _collect_render_paths(output_dir)
     if not render_paths:
+        logger.error(
+            "render_no_output",
+            extra={"request_id": request_id, "elapsed": round(elapsed, 1)},
+        )
         raise RuntimeError("Renderer did not produce PNG files")
+    logger.info(
+        "render_finished",
+        extra={
+            "request_id": request_id,
+            "elapsed": round(elapsed, 1),
+            "frames": len(render_paths),
+        },
+    )
     return {"render_paths": render_paths}
