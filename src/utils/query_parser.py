@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 SHAPE_ALIASES = {
@@ -16,6 +17,8 @@ SHAPE_ALIASES = {
     "п": "П-образная",
     "п-образная": "П-образная",
 }
+
+_SHAPE_PARENS_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 HANDLE_POSITION_ALIASES = {
     "left": "Лево",
@@ -105,7 +108,10 @@ WALL_ALIASES = {
 def normalize_shape(value: str | None) -> str:
     if not value:
         return "Прямая"
-    stripped = value.strip()
+    # Strip trailing parentheticals like "П-образная (ниша)" — Gemini sometimes
+    # appends descriptive suffixes that survive into render params and break
+    # exact-match validation downstream.
+    stripped = _SHAPE_PARENS_RE.sub("", value.strip())
     return SHAPE_ALIASES.get(stripped.lower(), stripped)
 
 

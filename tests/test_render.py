@@ -2,9 +2,22 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from src.engine import render_engine
 from src.models import RenderPartitionAction
+
+
+def test_render_partition_action_rejects_unknown_shape():
+    # Single-letter / non-canonical values must be rejected at the model boundary
+    # so we never reach the renderer with a malformed shape (regression for
+    # Gemini emitting shape="Р").
+    for bad in ("Р", "P", "П", "u", "П-образная (ниша)"):
+        with pytest.raises(ValidationError):
+            RenderPartitionAction(shape=bad, height=2.5, width_a=3)
+    # Canonical values pass through unchanged.
+    for good in ("Прямая", "Г-образная", "П-образная"):
+        RenderPartitionAction(shape=good, height=2.5, width_a=3)
 
 
 @pytest.mark.asyncio

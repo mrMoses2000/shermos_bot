@@ -24,6 +24,15 @@ def test_tools_schema_and_query_normalization():
     assert "render_partition" in get_tools_schema()
     assert normalize_shape("угловая") == "Г-образная"
     assert normalize_shape(None) == "Прямая"
+    # Trailing parenthetical descriptors (Gemini sometimes appends "(ниша)" / "(угол)")
+    # must be stripped so the canonical string survives validation.
+    assert normalize_shape("П-образная (ниша)") == "П-образная"
+    assert normalize_shape("Г-образная (угол)") == "Г-образная"
+    assert normalize_shape("  Прямая  ") == "Прямая"
+    # Single Cyrillic "Р" (U+0420 — "er") must NOT silently map to "П-образная";
+    # it should fall through unchanged so the Pydantic Literal on
+    # RenderPartitionAction.shape can reject it loudly.
+    assert normalize_shape("Р") == "Р"
     assert normalize_handle_position("слева") == "Лево"
     assert normalize_shape_side("слева") == "left"
     assert normalize_shape_side("справа") == "right"

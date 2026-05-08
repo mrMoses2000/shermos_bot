@@ -29,7 +29,7 @@ class Job(BaseModel):
 
 
 class RenderPartitionAction(BaseModel):
-    shape: str
+    shape: Literal["Прямая", "Г-образная", "П-образная"]
     shape_side: Optional[str] = None
     height: float
     width_a: float
