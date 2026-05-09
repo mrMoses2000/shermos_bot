@@ -257,6 +257,27 @@ async def insert_outbound_event(
     )
 
 
+async def revive_failed_outbound_by_key(pool, idempotency_key: str) -> int:
+    """Delete a 'failed' outbound row with this idempotency_key so the next
+    insert with the same key can succeed.
+
+    Used to retry reminders that died while the WhatsApp bridge was down.
+    Only touches rows in terminal 'failed' state — pending or sent rows are
+    left alone (returns 0). Returns the number of rows deleted.
+    """
+    return await pool.fetchval(
+        """
+        WITH deleted AS (
+            DELETE FROM outbound_events
+            WHERE idempotency_key = $1 AND status = 'failed'
+            RETURNING 1
+        )
+        SELECT COUNT(*)::int FROM deleted
+        """,
+        idempotency_key,
+    )
+
+
 async def mark_outbound_sent(
     pool,
     event_id: int,

@@ -469,20 +469,35 @@ def parse_slot_proposal(text: str, timezone: str, now: datetime | None = None) -
     return date_value.strftime("%Y-%m-%d"), f"{hour:02d}:{minute:02d}"
 
 
-async def get_due_reminders(pool, *, window_start_min: int = 55, window_end_min: int = 60) -> list[dict[str, Any]]:
-    """Return confirmed measurements scheduled in [now+55min, now+60min] without a reminder yet."""
+async def get_due_reminders(pool, *, lookahead_minutes: int = 60) -> list[dict[str, Any]]:
+    """Return confirmed measurements due for the 1-hour reminder.
+
+    Picks anything scheduled within (now, now + lookahead_minutes] whose
+    *client* reminder has not already landed in WhatsApp. We use the
+    'reminder:{id}' idempotency_key on outbound_events as the source of
+    truth instead of measurements.reminder_sent_at — the previous design
+    flipped reminder_sent_at right after queuing the outbound, so a bridge
+    outage between insert and delivery left the reminder marked-sent but
+    never delivered (witnessed on 2026-05-09). Filtering on
+    outbound_events.status='sent' lets the loop retry on the next tick if
+    delivery failed; revive_failed_outbound_by_key handles the unique-key
+    collision in that retry.
+    """
     rows = await pool.fetch(
         """
-        SELECT id, client_chat_id, client_name, client_phone, address, scheduled_time
-        FROM measurements
-        WHERE status = 'confirmed'
-          AND reminder_sent_at IS NULL
-          AND scheduled_time BETWEEN now() + ($1 || ' minutes')::interval
-                                AND now() + ($2 || ' minutes')::interval
-        ORDER BY scheduled_time
+        SELECT m.id, m.client_chat_id, m.client_name, m.client_phone, m.address, m.scheduled_time
+        FROM measurements m
+        WHERE m.status = 'confirmed'
+          AND m.scheduled_time > now()
+          AND m.scheduled_time <= now() + ($1 || ' minutes')::interval
+          AND NOT EXISTS (
+              SELECT 1 FROM outbound_events o
+              WHERE o.idempotency_key = 'reminder:' || m.id::text
+                AND o.status IN ('pending', 'sent')
+          )
+        ORDER BY m.scheduled_time
         """,
-        str(window_start_min),
-        str(window_end_min),
+        str(lookahead_minutes),
     )
     return [dict(r) for r in rows]
 

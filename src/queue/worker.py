@@ -849,6 +849,10 @@ async def _measurement_reminder_loop(pg_pool, interval_seconds: int = 60) -> Non
                         f"📍 Адрес: {addr}\n\n"
                         "Если планы изменились — напишите нам."
                     )
+                    client_key = f"reminder:{m['id']}"
+                    # Clear any prior 'failed' attempt for this key so the
+                    # unique idempotency_key constraint doesn't block retry.
+                    await postgres.revive_failed_outbound_by_key(pg_pool, client_key)
                     await postgres.insert_outbound_event(
                         pg_pool,
                         channel="whatsapp",
@@ -856,7 +860,7 @@ async def _measurement_reminder_loop(pg_pool, interval_seconds: int = 60) -> Non
                         external_chat_id=f"{client_chat_id}@s.whatsapp.net",
                         reply_text=client_text,
                         bot_type="client",
-                        idempotency_key=f"reminder:{m['id']}",
+                        idempotency_key=client_key,
                     )
                     for manager_phone in settings.manager_whatsapp_numbers_list:
                         manager_text = (
@@ -864,6 +868,8 @@ async def _measurement_reminder_loop(pg_pool, interval_seconds: int = 60) -> Non
                             f"клиент {m.get('client_name', '?')}, {m.get('client_phone', '?')}\n"
                             f"📍 {addr}"
                         )
+                        manager_key = f"reminder:{m['id']}:{manager_phone}"
+                        await postgres.revive_failed_outbound_by_key(pg_pool, manager_key)
                         await postgres.insert_outbound_event(
                             pg_pool,
                             channel="whatsapp",
@@ -871,10 +877,12 @@ async def _measurement_reminder_loop(pg_pool, interval_seconds: int = 60) -> Non
                             external_chat_id=f"{manager_phone}@s.whatsapp.net",
                             reply_text=manager_text,
                             bot_type="manager",
-                            idempotency_key=f"reminder:{m['id']}:{manager_phone}",
+                            idempotency_key=manager_key,
                         )
+                    # Telemetry only — actual delivery dedup is via the
+                    # idempotency_key + status filter in get_due_reminders.
                     await mark_reminder_sent(pg_pool, m["id"])
-                    logger.info("measurement_reminder_sent", extra={"measurement_id": m["id"]})
+                    logger.info("measurement_reminder_queued", extra={"measurement_id": m["id"]})
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

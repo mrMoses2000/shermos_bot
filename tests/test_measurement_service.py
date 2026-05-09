@@ -351,9 +351,17 @@ async def test_get_due_reminders_uses_correct_window():
     await measurement_service.get_due_reminders(pool)
     assert pool.calls
     sql = pool.calls[0][1]
-    assert "reminder_sent_at IS NULL" in sql
+    args = pool.calls[0][2]
     assert "status = 'confirmed'" in sql
-    assert "scheduled_time BETWEEN" in sql
+    # 60-minute lookahead, not the old [55, 60] window — see commit message
+    assert "scheduled_time > now()" in sql
+    assert "<= now() +" in sql
+    assert args == ("60",)
+    # Dedup is on outbound_events idempotency_key, not on reminder_sent_at,
+    # so a failed delivery can be retried on the next tick.
+    assert "outbound_events" in sql
+    assert "'reminder:'" in sql
+    assert "reminder_sent_at IS NULL" not in sql
 
 
 @pytest.mark.asyncio

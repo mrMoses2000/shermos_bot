@@ -1269,7 +1269,9 @@ async def test_C31_reminder_sent_one_hour_before(
     )
     assert len(manager_rows) >= 1
 
-    # Idempotency: reminder_sent_at is now set, second loop tick yields nothing new
+    # Idempotency: outbound_events row with this idempotency_key is already
+    # 'pending', so the SELECT in get_due_reminders excludes the measurement
+    # — second loop tick must NOT queue a duplicate.
     task2 = asyncio.create_task(worker_mod._measurement_reminder_loop(pg_pool_integration, interval_seconds=1))
     await asyncio.sleep(2)
     task2.cancel()
