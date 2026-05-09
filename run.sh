@@ -20,6 +20,15 @@ if [[ "${1:-}" == wa-bridge-* ]]; then
     exit $?
 fi
 
+# Operational sub-commands (test, service, logs, health, deploy, db, remote,
+# tunnel, cleanup, help). Bootstrap runs only when no sub-command matches.
+case "${1:-}" in
+    test|service|logs|health|deploy|db|remote|tunnel|cleanup|help|-h|--help)
+        bash "$(dirname "$0")/scripts/ops.sh" "$@"
+        exit $?
+        ;;
+esac
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
