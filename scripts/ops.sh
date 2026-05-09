@@ -61,6 +61,18 @@ require_local() {
     fi
 }
 
+# Pick a working Python interpreter: prefer the project's .venv, else system python3.
+# Lets `./run.sh test py` work from a git worktree that has no local venv.
+_python_bin() {
+    if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+        echo "$PROJECT_DIR/.venv/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then
+        echo python3
+    else
+        echo python
+    fi
+}
+
 # ────────────────────────────────────────────────────────────
 # remote  — re-invoke ./run.sh на сервере через SSH
 # ────────────────────────────────────────────────────────────
@@ -85,7 +97,7 @@ cmd_test() {
     case "$kind" in
         py|python|unit)
             step "🧪 Python unit-тесты"
-            "$PROJECT_DIR/.venv/bin/python" -m pytest -q
+            "$(_python_bin)" -m pytest -q
             ;;
         integration|integ)
             step "🧪 Python integration-тесты (реальные Postgres + Redis)"
@@ -96,7 +108,7 @@ cmd_test() {
             set +a
             INTEGRATION_DB_DSN="postgresql://shermos:${POSTGRES_PASSWORD}@127.0.0.1:5432/shermos_test" \
             INTEGRATION_REDIS_URL="redis://127.0.0.1:6379/15" \
-            "$PROJECT_DIR/.venv/bin/python" -m pytest -m integration -q
+            "$(_python_bin)" -m pytest -m integration -q
             ;;
         bridge|wa)
             step "🧪 WhatsApp bridge: typecheck + vitest"
@@ -329,7 +341,7 @@ cmd_db() {
         migrate)
             step "🗄️  Применяю незакрытые миграции (run_migrations)"
             cd "$PROJECT_DIR"
-            "$PROJECT_DIR/.venv/bin/python" - <<'PYEOF'
+            "$(_python_bin)" - <<'PYEOF'
 import asyncio
 from src.config import settings
 from src.db import postgres

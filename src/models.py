@@ -45,7 +45,7 @@ class RenderPartitionAction(BaseModel):
     frame_thickness: float = 0.04
     add_handle: bool = False
     handle_style: str = "Современный"
-    handle_position: str = "Право"
+    handle_position: Literal["Лево", "Центр", "Право"] = "Право"
     handle_side: Optional[Literal["inside", "outside", "both"]] = None
     handle_wall: Optional[str] = None
     handle_sections: Optional[list[int]] = None

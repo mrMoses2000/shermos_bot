@@ -185,7 +185,13 @@ async def apply_actions(
                     extra={"chat_id": chat_id, "request_id": existing_order["request_id"]},
                 )
                 result["order"] = existing_order
-                result["render_paths"] = existing_order.get("render_paths")
+                # Deliberately NOT setting render_paths here. The user already
+                # received this render in the original turn; re-sending the
+                # same images on every "ничего не меняли" turn just spams the
+                # chat (witnessed 2026-05-10 — Gemini hallucinated a
+                # render_partition call after the client confirmed measurement
+                # scheduling). Worker._send_render_result skips when paths is
+                # absent, so the client gets only the reply_text.
                 result["price"] = existing_order.get("price")
                 result["render_reused"] = True
             else:

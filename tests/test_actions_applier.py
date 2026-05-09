@@ -216,9 +216,13 @@ async def test_apply_actions_reuses_existing_rendered_order(monkeypatch):
     )
 
     assert result["render_reused"] is True
-    assert result["render_paths"] == {"0deg": "/tmp/a.png"}
+    # render_paths must NOT be populated on reuse — the user already received
+    # this exact render in the original turn; re-sending the same images on
+    # every "ничего не меняли" turn was spamming the chat (see commit msg).
+    assert result["render_paths"] is None
     assert result["price"] == {"total_price": 100, "currency": "USD"}
     assert "render" not in calls
+
 
 @pytest.mark.asyncio
 async def test_render_reuse_rejects_stale_rendered_order_when_params_changed(monkeypatch):

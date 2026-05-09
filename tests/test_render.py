@@ -20,6 +20,18 @@ def test_render_partition_action_rejects_unknown_shape():
         RenderPartitionAction(shape=good, height=2.5, width_a=3)
 
 
+def test_render_partition_action_handle_position_is_constrained():
+    # The renderer treats handle_position 'Лево' / 'Центр' / 'Право' as the
+    # intra-section horizontal placement of the handle. Anything else used to
+    # silently fall through to the right-edge default in _create_handle —
+    # now it must fail at the model boundary.
+    for bad in ("left", "left-side", "посередине", "верх"):
+        with pytest.raises(ValidationError):
+            RenderPartitionAction(shape="Прямая", height=2.5, width_a=3, handle_position=bad)
+    for good in ("Лево", "Центр", "Право"):
+        RenderPartitionAction(shape="Прямая", height=2.5, width_a=3, handle_position=good)
+
+
 @pytest.mark.asyncio
 async def test_render_partition_runs_subprocess_and_collects_output(monkeypatch, tmp_path):
     class Process:
