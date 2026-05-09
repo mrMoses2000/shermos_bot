@@ -177,3 +177,37 @@ async def test_mark_outbound_dead_sets_status_failed_immediately():
     # Must NOT include the conditional CASE … WHEN attempts … pattern
     assert "CASE WHEN attempts" not in query
     assert args[0] == 5
+
+
+@pytest.mark.asyncio
+async def test_revive_failed_outbound_by_key_filters_by_status():
+    """revive_failed_outbound_by_key only deletes 'failed' rows, not pending/sent."""
+    pool = FakePool(fetchval_result=2)
+
+    deleted = await postgres.revive_failed_outbound_by_key(pool, "reminder:42")
+
+    assert deleted == 2
+    assert len(pool.calls) == 1
+    op, query, args = pool.calls[0]
+    assert op == "fetchval"
+    assert "DELETE FROM outbound_events" in query
+    assert "status = 'failed'" in query
+    assert args == ("reminder:42",)
+
+
+@pytest.mark.asyncio
+async def test_abandon_stale_order_drafts_targets_collecting_and_confirming():
+    """abandon_stale_order_drafts only flips collecting/confirming → abandoned."""
+    pool = FakePool(fetchval_result=3)
+
+    abandoned = await postgres.abandon_stale_order_drafts(pool, max_age_hours=24)
+
+    assert abandoned == 3
+    op, query, args = pool.calls[0]
+    assert op == "fetchval"
+    assert "UPDATE order_drafts" in query
+    assert "status='abandoned'" in query
+    assert "status IN ('collecting', 'confirming')" in query
+    # Must NOT touch 'rendering' (short-lived, self-corrects) or terminal statuses
+    assert "rendering" not in query
+    assert args == ("24",)

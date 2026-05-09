@@ -605,6 +605,29 @@ async def abandon_current_order_draft(pool, chat_id: int, cancel_order: bool = T
     return draft
 
 
+async def abandon_stale_order_drafts(pool, *, max_age_hours: int = 24) -> int:
+    """Mark order_drafts in 'collecting'/'confirming' stuck for >max_age_hours
+    as abandoned. Without this, drafts from clients who lost interest pile
+    up forever and confuse downstream queries that look for active drafts.
+
+    Excludes 'rendering' — that one is short-lived and self-corrects when
+    the render finishes.
+    """
+    return await pool.fetchval(
+        """
+        WITH abandoned AS (
+            UPDATE order_drafts
+            SET status='abandoned', updated_at=now()
+            WHERE status IN ('collecting', 'confirming')
+              AND updated_at < now() - ($1 || ' hours')::interval
+            RETURNING 1
+        )
+        SELECT COUNT(*)::int FROM abandoned
+        """,
+        str(max_age_hours),
+    )
+
+
 async def mark_active_order_draft_rendered(pool, chat_id: int, order_request_id: str) -> None:
     await pool.execute(
         """

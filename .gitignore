@@ -18,6 +18,7 @@ mini-app/node_modules/
 *.rej
 patch.diff
 .env.backup-*
+.env.bak*
 shermos-cms-login.png
 smoke_e2e.py
 .playwright-mcp/

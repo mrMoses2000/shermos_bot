@@ -369,6 +369,38 @@ async def update_measurement_status(
     return updated
 
 
+async def auto_close_past_measurements(pool, *, grace_hours: int = 24) -> int:
+    """Move scheduled/confirmed measurements past their slot+duration+grace
+    into 'completed' so they stop showing up in pending queries.
+
+    Without this they sit in 'confirmed' forever after the master visits
+    the client — there's no auto-completion based on real-world outcome.
+    The grace window (default 24h) gives the master time to manually mark
+    'no_show' or 'cancelled' if applicable. Anything older than that we
+    optimistically assume completed; if the master needs to correct it
+    later, they can still do so via CMS.
+    """
+    return await pool.fetchval(
+        """
+        WITH closed AS (
+            UPDATE measurements
+            SET status='completed',
+                reason=CASE
+                    WHEN reason IS NULL OR reason = '' THEN 'Автозакрытие: прошло >' || $1 || 'ч после времени замера'
+                    ELSE reason
+                END,
+                updated_at=now()
+            WHERE status IN ('scheduled', 'confirmed')
+              AND scheduled_time + (duration_minutes || ' minutes')::interval
+                  + ($1 || ' hours')::interval < now()
+            RETURNING 1
+        )
+        SELECT COUNT(*)::int FROM closed
+        """,
+        str(grace_hours),
+    )
+
+
 async def auto_confirm_due_measurements(pool) -> list[dict[str, Any]]:
     """Auto-confirm measurements that stayed scheduled past the manager decision deadline.
 

@@ -830,6 +830,30 @@ async def _measurement_auto_confirm_loop(pg_pool, sender: WhatsAppSender, interv
         await asyncio.sleep(interval_seconds)
 
 
+async def _maintenance_loop(pg_pool, interval_seconds: int = 3600) -> None:
+    """Hourly housekeeping: close past-due measurements, abandon stale drafts.
+
+    Both ops are idempotent UPDATEs guarded by time-window predicates, so
+    duplicate runs are harmless. We log the row counts only when non-zero
+    to keep journals quiet on idle systems.
+    """
+    from src.engine.measurement_service import auto_close_past_measurements
+
+    while True:
+        try:
+            closed = await auto_close_past_measurements(pg_pool)
+            if closed:
+                logger.info("measurements_auto_closed", extra={"count": closed})
+            abandoned = await postgres.abandon_stale_order_drafts(pg_pool)
+            if abandoned:
+                logger.info("order_drafts_abandoned", extra={"count": abandoned})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("maintenance_loop_error", extra={"error": str(exc)})
+        await asyncio.sleep(interval_seconds)
+
+
 async def _measurement_reminder_loop(pg_pool, interval_seconds: int = 60) -> None:
     """Once a minute: queue WhatsApp reminders for confirmed measurements ~1h away."""
     from src.engine.measurement_service import get_due_reminders, mark_reminder_sent
@@ -1155,6 +1179,7 @@ async def run_worker() -> None:
         asyncio.create_task(run_gemini_health_check()),
         asyncio.create_task(_measurement_auto_confirm_loop(pg_pool, whatsapp_sender)),
         asyncio.create_task(_measurement_reminder_loop(pg_pool)),
+        asyncio.create_task(_maintenance_loop(pg_pool)),
         asyncio.create_task(recover_stuck_jobs_periodic_loop(redis_client)),
     ]
     try:

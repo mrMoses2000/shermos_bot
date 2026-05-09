@@ -10,9 +10,10 @@ TZ = "Asia/Bishkek"
 
 
 class FakePool:
-    def __init__(self, fetchrow_results=None, fetch_results=None):
+    def __init__(self, fetchrow_results=None, fetch_results=None, fetchval_results=None):
         self.fetchrow_results = list(fetchrow_results or [])
         self.fetch_results = list(fetch_results or [])
+        self.fetchval_results = list(fetchval_results or [])
         self.fetchrow_calls = []
         self.fetch_calls = []
         self.calls = []
@@ -26,6 +27,10 @@ class FakePool:
         self.fetch_calls.append((query, args))
         self.calls.append(("fetch", query, args))
         return self.fetch_results.pop(0) if self.fetch_results else []
+
+    async def fetchval(self, query, *args):
+        self.calls.append(("fetchval", query, args))
+        return self.fetchval_results.pop(0) if self.fetchval_results else 0
 
     async def execute(self, query, *args):
         self.calls.append(("execute", query, args))
@@ -362,6 +367,20 @@ async def test_get_due_reminders_uses_correct_window():
     assert "outbound_events" in sql
     assert "'reminder:'" in sql
     assert "reminder_sent_at IS NULL" not in sql
+
+
+@pytest.mark.asyncio
+async def test_auto_close_past_measurements_uses_grace_window():
+    pool = FakePool(fetchval_results=[3])
+    closed = await measurement_service.auto_close_past_measurements(pool, grace_hours=24)
+    assert closed == 3
+    assert pool.calls
+    _kind, sql, args = pool.calls[0]
+    assert "UPDATE measurements" in sql
+    assert "status='completed'" in sql
+    assert "scheduled_time + (duration_minutes" in sql
+    assert "WHERE status IN ('scheduled', 'confirmed')" in sql
+    assert args == ("24",)
 
 
 @pytest.mark.asyncio
