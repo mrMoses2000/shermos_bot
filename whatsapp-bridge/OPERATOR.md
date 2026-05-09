@@ -8,23 +8,22 @@ Current preferred path: QR linking. Phone-code linking is kept as a fallback bec
 
 To pair the bridge with a WhatsApp account by QR:
 
-1. Stop any running bridge process:
+1. Stop the systemd service for the role you are re-pairing (do NOT use `wa-bridge-stop` — that pkills BOTH client and manager bridges):
    ```bash
-   ./run.sh wa-bridge-stop
+   sudo systemctl stop shermos-wa-client     # or shermos-wa-manager
    ```
-2. Reset only the Baileys auth state:
+2. Reset only the Baileys auth state for that role. Pass the role explicitly so you don't wipe the other bridge's session:
    ```bash
-   ./run.sh wa-bridge-reset-auth
+   ./run.sh wa-bridge-reset-auth client      # or 'manager', or 'both'
    ```
 3. Start the bridge with QR output:
    ```bash
    ./run.sh wa-bridge-start-qr
    ```
 4. Open WhatsApp on your phone, go to **Settings > Linked Devices > Link a Device**, and scan the QR printed in the terminal.
-5. After logs show that the connection is open, stop the QR session and start the normal bridge:
+5. After logs show that the connection is open, Ctrl+C the QR session and bring the systemd service back up:
    ```bash
-   ./run.sh wa-bridge-stop
-   ./run.sh wa-bridge-start
+   sudo systemctl start shermos-wa-client    # or shermos-wa-manager
    ```
 
 Fallback phone-code pairing:
@@ -51,8 +50,8 @@ If the session is lost or you get a `Logged out` error in logs:
 
 1. The bridge will exit with code 1.
 2. Ensure you have the correct `BRIDGE_SHARED_SECRET`.
-3. Reset auth with `./run.sh wa-bridge-reset-auth`.
-4. Follow the QR **Pairing** steps again.
+3. Reset auth for the affected role only: `./run.sh wa-bridge-reset-auth client` (or `manager`).
+4. Follow the QR **Pairing** steps above.
 
 ## Redis Auth Backup
 

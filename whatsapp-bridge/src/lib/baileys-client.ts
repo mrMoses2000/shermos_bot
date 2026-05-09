@@ -98,14 +98,34 @@ export const refreshManagerSelfSessions = async () => {
   }
 };
 
+// JIDs we never want to forward to the Python ingress.
+// Without these filters, contact status updates ("status@broadcast"),
+// newsletter posts and broadcast-list messages were being processed as if
+// they were direct messages — the bot then replied into the void and burned
+// Gemini calls on noise.
+const NON_DM_JID_SUFFIXES = [
+  '@g.us',          // group chats
+  '@broadcast',     // status@broadcast and user broadcast lists
+  '@newsletter',    // WhatsApp channels
+];
+
+export const isDirectChatJid = (jid: string | null | undefined): boolean => {
+  if (!jid) return false;
+  if (jid === 'status@s.whatsapp.net') return false;  // legacy status JID
+  for (const suffix of NON_DM_JID_SUFFIXES) {
+    if (jid.endsWith(suffix)) return false;
+  }
+  return true;
+};
+
 export const shouldProcessIncomingMessage = async (m: WAMessage) => {
-  if (!m.key.remoteJid || m.key.remoteJid.endsWith('@g.us')) {
+  if (!isDirectChatJid(m.key.remoteJid)) {
     return false;
   }
   if (!m.key.fromMe) {
     return true;
   }
-  if (getBridgeRole() !== 'manager' || !isOwnChat(m.key.remoteJid)) {
+  if (getBridgeRole() !== 'manager' || !isOwnChat(m.key.remoteJid!)) {
     return false;
   }
   if (state.redisClient && await isSentByBridge(state.redisClient, m.key)) {

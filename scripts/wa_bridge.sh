@@ -175,31 +175,67 @@ cmd_wa_bridge_server_preflight() {
 }
 
 cmd_wa_bridge_reset_auth() {
-    step "WhatsApp Bridge Reset Auth"
-    check_env
-    PREFIX=$(env_val "BAILEYS_AUTH_PREFIX")
-    if [ -z "$PREFIX" ]; then
-        PREFIX="baileys:auth:"
+    # Usage: wa-bridge-reset-auth <client|manager|both>
+    # Default: both (preserves legacy behavior, but warns).
+    local role="${1:-}"
+    if [ -z "$role" ]; then
+        warn "No role argument given. Pass 'client', 'manager', or 'both' explicitly."
+        warn "Defaulting to 'both' for backwards compat — this WILL kill BOTH bridges' WA session."
+        role="both"
     fi
+    if [ "$role" != "client" ] && [ "$role" != "manager" ] && [ "$role" != "both" ]; then
+        err "Invalid role '$role'. Must be: client | manager | both."
+        exit 1
+    fi
+
+    step "WhatsApp Bridge Reset Auth ($role)"
+    check_env
+
+    # Default prefixes per role; .env values override only when reading from
+    # a specific bridge env file. The client bridge stores under
+    # 'baileys:auth:' (manager keys live under 'baileys:auth:manager:'), so
+    # a naive SCAN of 'baileys:auth:*' would also wipe manager state. We
+    # therefore filter explicitly.
+    local CLIENT_PREFIX="baileys:auth:"
+    local MANAGER_PREFIX="baileys:auth:manager:"
+
     REDIS_URL=$(env_val "REDIS_URL")
     if [ -z "$REDIS_URL" ]; then
         REDIS_URL="redis://localhost:6379/0"
     fi
 
-    log "Resetting auth keys in Redis with prefix: $PREFIX"
+    log "Resetting auth: role=$role  client_prefix='$CLIENT_PREFIX'  manager_prefix='$MANAGER_PREFIX'"
     cd "$WA_DIR"
-    REDIS_URL="$REDIS_URL" BAILEYS_AUTH_PREFIX="$PREFIX" node <<'NODE'
+    REDIS_URL="$REDIS_URL" \
+    RESET_ROLE="$role" \
+    CLIENT_PREFIX="$CLIENT_PREFIX" \
+    MANAGER_PREFIX="$MANAGER_PREFIX" \
+    node <<'NODE'
 const Redis = require('ioredis');
 const redis = new Redis(process.env.REDIS_URL);
-const prefix = process.env.BAILEYS_AUTH_PREFIX || 'baileys:auth:';
+const role = process.env.RESET_ROLE;
+const clientPrefix = process.env.CLIENT_PREFIX;
+const managerPrefix = process.env.MANAGER_PREFIX;
+
+const shouldDelete = (key) => {
+  const isManager = key.startsWith(managerPrefix);
+  if (role === 'client')  return key.startsWith(clientPrefix) && !isManager;
+  if (role === 'manager') return isManager;
+  if (role === 'both')    return key.startsWith(clientPrefix); // includes manager
+  return false;
+};
+
 let deleted = 0;
-const stream = redis.scanStream({ match: `${prefix}*`, count: 100 });
+let kept = 0;
+const stream = redis.scanStream({ match: `${clientPrefix}*`, count: 100 });
 
 stream.on('data', async (keys) => {
   stream.pause();
   try {
-    if (keys.length) {
-      deleted += await redis.del(...keys);
+    const targets = keys.filter(shouldDelete);
+    kept += keys.length - targets.length;
+    if (targets.length) {
+      deleted += await redis.del(...targets);
     }
   } finally {
     stream.resume();
@@ -207,7 +243,7 @@ stream.on('data', async (keys) => {
 });
 
 stream.on('end', async () => {
-  console.log(`Deleted ${deleted} keys`);
+  console.log(`role=${role}  deleted=${deleted}  kept=${kept}`);
   await redis.quit();
 });
 
@@ -217,7 +253,7 @@ stream.on('error', async (err) => {
   process.exit(1);
 });
 NODE
-    log "Auth state reset successfully."
+    log "Auth state reset successfully (role=$role)."
 }
 
 cmd_wa_bridge_stop() {
@@ -335,7 +371,7 @@ case "$COMMAND" in
         cmd_wa_bridge_server_preflight
         ;;
     wa-bridge-reset-auth)
-        cmd_wa_bridge_reset_auth
+        cmd_wa_bridge_reset_auth "$@"
         ;;
     wa-bridge-stop)
         cmd_wa_bridge_stop

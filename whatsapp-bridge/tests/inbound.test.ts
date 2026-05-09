@@ -249,6 +249,33 @@ describe('Inbound Messaging', () => {
     expect(await shouldProcessIncomingMessage(fromMe)).toBe(false);
   });
 
+  it('should drop status / newsletter / broadcast JIDs (non-DM)', async () => {
+    process.env.BRIDGE_ROLE = 'client';
+    const cases = [
+      'status@s.whatsapp.net',
+      'status@broadcast',
+      '120363111111111111@newsletter',
+      '120363999999999999@broadcast',
+      '120363111111111111@g.us',
+    ];
+    for (const remoteJid of cases) {
+      const m: any = {
+        key: { id: `evt-${remoteJid}`, remoteJid, fromMe: false },
+        message: { conversation: 'noise from contact status update' },
+      };
+      expect(await shouldProcessIncomingMessage(m)).toBe(false);
+    }
+  });
+
+  it('should still accept normal direct messages', async () => {
+    process.env.BRIDGE_ROLE = 'client';
+    const dm: any = {
+      key: { id: 'dm-1', remoteJid: '77085766841@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'привет' },
+    };
+    expect(await shouldProcessIncomingMessage(dm)).toBe(true);
+  });
+
   it('should allow spool processor to retry and clear queue on success', async () => {
     const payload = { external_id: 'spooled123' };
     await redis.lpush('bridge:spool:inbound', JSON.stringify(payload));
