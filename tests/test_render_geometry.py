@@ -100,3 +100,59 @@ def test_create_handle_both_has_positive_and_negative_z():
     z_values = [_centroid_z(p) for p in parts]
     assert any(z > 0 for z in z_values), "Expected at least one part with positive Z"
     assert any(z < 0 for z in z_values), "Expected at least one part with negative Z"
+
+
+def _centroid_x(part):
+    """Mean X coordinate of a mesh part's bounding box."""
+    return (part.bounds[0][0] + part.bounds[1][0]) / 2.0
+
+
+# ---------------------------------------------------------------------------
+# handle_position — intra-section X placement
+#
+# The renderer derives x_pos from section_bounds via:
+#   "Лево":  x_start + section_width * 0.1
+#   "Центр": x_start + section_width * 0.5
+#   "Право": x_end   - section_width * 0.1
+# These tests pin the math to the contract documented in tools_schema.py so a
+# stray edit to the offset constant or to x_start/x_end would fail loudly.
+# ---------------------------------------------------------------------------
+
+def test_create_handle_position_left_anchors_near_section_start():
+    bounds = (0.5, 2.0)  # section_width = 1.5; expected x ≈ 0.5 + 0.15 = 0.65
+    parts = _create_handle("Современный", "Лево", 1.0, 2.0, section_bounds=bounds)
+    assert parts
+    avg_x = sum(_centroid_x(p) for p in parts) / len(parts)
+    assert 0.6 < avg_x < 0.75, f"'Лево' should sit near x_start; got {avg_x:.3f}"
+
+
+def test_create_handle_position_center_anchors_in_section_middle():
+    bounds = (0.5, 2.0)  # midpoint = 1.25
+    parts = _create_handle("Современный", "Центр", 1.0, 2.0, section_bounds=bounds)
+    assert parts
+    avg_x = sum(_centroid_x(p) for p in parts) / len(parts)
+    assert 1.20 < avg_x < 1.30, f"'Центр' should sit at section midpoint; got {avg_x:.3f}"
+
+
+def test_create_handle_position_right_anchors_near_section_end():
+    bounds = (0.5, 2.0)  # section_width = 1.5; expected x ≈ 2.0 - 0.15 = 1.85
+    parts = _create_handle("Современный", "Право", 1.0, 2.0, section_bounds=bounds)
+    assert parts
+    avg_x = sum(_centroid_x(p) for p in parts) / len(parts)
+    assert 1.75 < avg_x < 1.90, f"'Право' should sit near x_end; got {avg_x:.3f}"
+
+
+def test_create_handle_position_left_center_right_are_distinct():
+    """Sanity: the three positions must produce visibly different X coordinates,
+    not all collapse to the default."""
+    bounds = (0.5, 2.0)
+    avg = {}
+    for pos in ("Лево", "Центр", "Право"):
+        parts = _create_handle("Современный", pos, 1.0, 2.0, section_bounds=bounds)
+        avg[pos] = sum(_centroid_x(p) for p in parts) / len(parts)
+    assert avg["Лево"] < avg["Центр"] < avg["Право"], (
+        f"Positions should be ordered left-to-right; got {avg}"
+    )
+    # And spread should be at least half the section width — guards against a
+    # regression where the offset coefficient gets tiny.
+    assert avg["Право"] - avg["Лево"] > 0.7, f"Spread too small: {avg}"

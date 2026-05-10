@@ -377,6 +377,16 @@ export async function processNextSpoolItem() {
 
   try {
     const payload = JSON.parse(item);
+    // Defense-in-depth: even though shouldProcessIncomingMessage gates new
+    // messages, the spool may hold pre-filter legacy items from before the
+    // status/broadcast/newsletter exclusion was deployed. Drop them silently
+    // here so the bot doesn't reply to a year-old contact status update on
+    // recovery.
+    const jid = payload?.external_chat_id;
+    if (typeof jid === 'string' && !isDirectChatJid(jid)) {
+      logger.warn({ jid }, 'Dropping non-DM payload from spool');
+      return false;
+    }
     const success = await forwardToIngress(payload);
     return success;
   } catch (err) {

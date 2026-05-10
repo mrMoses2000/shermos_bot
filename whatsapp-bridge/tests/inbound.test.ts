@@ -276,6 +276,57 @@ describe('Inbound Messaging', () => {
     expect(await shouldProcessIncomingMessage(dm)).toBe(true);
   });
 
+  it('processNextSpoolItem drops legacy non-DM payloads (defense-in-depth)', async () => {
+    // Defensively guard against pre-filter spool entries that could exist
+    // from a deploy before the JID exclusion landed. The spooled payload
+    // shape is what handleIncomingMessage emits — only the relevant fields
+    // are needed for this check.
+    let ingressCalled = false;
+    server.use(
+      http.post(INGRESS_URL, () => {
+        ingressCalled = true;
+        return HttpResponse.json({ status: 'ok' });
+      })
+    );
+
+    const legacyStatusPayload = {
+      external_id: 'legacy-status-1',
+      external_chat_id: 'status@broadcast',
+      bridge_role: 'client',
+      bot_type: 'client',
+      text: 'photo from contact status',
+      msg_type: 'image',
+    };
+    await redis.lpush('bridge:spool:inbound', JSON.stringify(legacyStatusPayload));
+
+    const result = await processNextSpoolItem();
+
+    expect(result).toBe(false);
+    expect(ingressCalled).toBe(false);
+    // Spool should be drained — we rpop'd the bad item even though we didn't
+    // forward it. Otherwise it'd loop forever.
+    const remaining = await redis.llen('bridge:spool:inbound');
+    expect(remaining).toBe(0);
+  });
+
+  it('processNextSpoolItem still forwards a legitimate DM payload from spool', async () => {
+    server.use(
+      http.post(INGRESS_URL, () => HttpResponse.json({ status: 'ok' })),
+    );
+    const goodPayload = {
+      external_id: 'good-spooled-1',
+      external_chat_id: '77085766841@s.whatsapp.net',
+      bridge_role: 'client',
+      bot_type: 'client',
+      text: 'hi',
+      msg_type: 'text',
+    };
+    await redis.lpush('bridge:spool:inbound', JSON.stringify(goodPayload));
+
+    const result = await processNextSpoolItem();
+    expect(result).toBe(true);
+  });
+
   it('should allow spool processor to retry and clear queue on success', async () => {
     const payload = { external_id: 'spooled123' };
     await redis.lpush('bridge:spool:inbound', JSON.stringify(payload));

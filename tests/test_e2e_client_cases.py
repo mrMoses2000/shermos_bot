@@ -1284,3 +1284,118 @@ async def test_C31_reminder_sent_one_hour_before(
         CHAT_ID,
     )
     assert final_count == 1, "duplicate reminder must not be queued"
+
+
+@pytest.mark.asyncio
+async def test_C32_reminder_retries_after_bridge_outage(
+    pg_pool_integration,
+    redis_client_integration,
+    reset_integration_db,
+    monkeypatch,
+):
+    """End-to-end retry flow:
+
+    1. Confirmed measurement is due in ~58 min.
+    2. Loop runs, queues outbound — but it lands in status='failed' with
+       attempts=5 (simulating today's WhatsApp bridge outage where 5 retries
+       drained without delivery).
+    3. Loop runs again. The new code path must:
+         a. revive_failed_outbound_by_key delete the failed row
+         b. SELECT in get_due_reminders pick up the measurement again
+            (because no 'pending'/'sent' outbound exists anymore for that
+            idempotency_key)
+         c. insert_outbound_event create a fresh pending row
+       Net effect: client gets the reminder on the next tick instead of
+       silently losing it forever — which is what happened on 2026-05-09
+       with measurement #3.
+    """
+    from datetime import timezone as _tz
+
+    from src.config import settings
+    from src.queue import worker as worker_mod
+
+    CHAT_ID = 110032
+    MANAGER_PHONE = "77085766841"
+    monkeypatch.setattr(settings, "manager_whatsapp_numbers", MANAGER_PHONE)
+
+    await postgres.create_client(pg_pool_integration, CHAT_ID)
+
+    # Confirmed measurement in 58 min — same setup as C31.
+    target = datetime.now(_tz.utc) + timedelta(minutes=58)
+    m_id = await pg_pool_integration.fetchval(
+        """
+        INSERT INTO measurements (client_chat_id, scheduled_time, duration_minutes, status,
+                                   client_name, client_phone, address)
+        VALUES ($1, $2, 60, 'confirmed', 'Test', '+77001234567', 'Test Addr')
+        RETURNING id
+        """,
+        CHAT_ID, target,
+    )
+    client_key = f"reminder:{m_id}"
+
+    # Pre-seed a 'failed' outbound for the client reminder, mimicking the
+    # state after 5 unsuccessful bridge deliveries.
+    failed_id = await pg_pool_integration.fetchval(
+        """
+        INSERT INTO outbound_events
+            (chat_id, bot_type, channel, external_chat_id, reply_text,
+             status, attempts, idempotency_key)
+        VALUES ($1, 'client', 'whatsapp', $2, 'old failed reminder text',
+                'failed', 5, $3)
+        RETURNING id
+        """,
+        CHAT_ID, f"{CHAT_ID}@s.whatsapp.net", client_key,
+    )
+    assert failed_id is not None
+
+    # Sanity: dispatcher would NOT pick this row up — attempts >= 5.
+    pending_for_dispatch = await pg_pool_integration.fetchval(
+        """
+        SELECT count(*) FROM outbound_events
+        WHERE status='pending' AND attempts < 5
+        """
+    )
+    assert pending_for_dispatch == 0
+
+    # Run the loop briefly. revive_failed_outbound_by_key should clear the
+    # failed row, then insert_outbound_event creates a fresh pending one.
+    task = asyncio.create_task(worker_mod._measurement_reminder_loop(pg_pool_integration, interval_seconds=1))
+    try:
+        deadline = datetime.now() + timedelta(seconds=10)
+        while datetime.now() < deadline:
+            pending = await pg_pool_integration.fetchval(
+                """
+                SELECT count(*) FROM outbound_events
+                WHERE chat_id=$1 AND idempotency_key=$2 AND status='pending'
+                """,
+                CHAT_ID, client_key,
+            )
+            if pending >= 1:
+                break
+            await asyncio.sleep(0.3)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # Old failed row is gone.
+    failed_remaining = await pg_pool_integration.fetchval(
+        "SELECT count(*) FROM outbound_events WHERE id=$1", failed_id
+    )
+    assert failed_remaining == 0, "Failed reminder row must be revived (deleted)"
+
+    # Exactly one pending row with the new key — the actual retry.
+    pending_with_key = await pg_pool_integration.fetch(
+        """
+        SELECT reply_text, status, attempts FROM outbound_events
+        WHERE idempotency_key=$1
+        """,
+        client_key,
+    )
+    assert len(pending_with_key) == 1
+    row = pending_with_key[0]
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+    assert "через час" in row["reply_text"]

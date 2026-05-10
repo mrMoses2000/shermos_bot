@@ -180,6 +180,31 @@ async def test_mark_outbound_dead_sets_status_failed_immediately():
 
 
 @pytest.mark.asyncio
+async def test_insert_outbound_event_uses_on_conflict_do_nothing():
+    """Duplicate idempotency_key inserts must not raise; the partial unique
+    index on (idempotency_key) WHERE idempotency_key IS NOT NULL is now
+    handled by ON CONFLICT DO NOTHING. Guards against UniqueViolationError
+    crashing the reminder loop / new_order broadcast on retry."""
+    pool = FakePool(fetchval_result=42)
+
+    await postgres.insert_outbound_event(
+        pool,
+        chat_id=1,
+        reply_text="hello",
+        idempotency_key="reminder:99",
+    )
+
+    op, query, _args = pool.calls[0]
+    assert op == "fetchval"
+    assert "INSERT INTO outbound_events" in query
+    assert "ON CONFLICT" in query
+    assert "DO NOTHING" in query
+    # Targeting the partial-index expression — must mention the predicate
+    # so Postgres can match the right unique constraint.
+    assert "idempotency_key IS NOT NULL" in query
+
+
+@pytest.mark.asyncio
 async def test_revive_failed_outbound_by_key_filters_by_status():
     """revive_failed_outbound_by_key only deletes 'failed' rows, not pending/sent."""
     pool = FakePool(fetchval_result=2)
@@ -196,11 +221,16 @@ async def test_revive_failed_outbound_by_key_filters_by_status():
 
 
 @pytest.mark.asyncio
-async def test_abandon_stale_order_drafts_targets_collecting_and_confirming():
-    """abandon_stale_order_drafts only flips collecting/confirming → abandoned."""
+async def test_abandon_stale_order_drafts_targets_collecting_confirming_and_rendering():
+    """abandon_stale_order_drafts flips collecting/confirming/rendering → abandoned.
+    'rendering' uses a tighter minute window because that status is transient
+    (Blender 5min cap) — anything older means the render task crashed without
+    cleanup."""
     pool = FakePool(fetchval_result=3)
 
-    abandoned = await postgres.abandon_stale_order_drafts(pool, max_age_hours=24)
+    abandoned = await postgres.abandon_stale_order_drafts(
+        pool, max_age_hours=24, rendering_max_age_minutes=30,
+    )
 
     assert abandoned == 3
     op, query, args = pool.calls[0]
@@ -208,6 +238,9 @@ async def test_abandon_stale_order_drafts_targets_collecting_and_confirming():
     assert "UPDATE order_drafts" in query
     assert "status='abandoned'" in query
     assert "status IN ('collecting', 'confirming')" in query
-    # Must NOT touch 'rendering' (short-lived, self-corrects) or terminal statuses
-    assert "rendering" not in query
-    assert args == ("24",)
+    # Rendering branch must be present with a SEPARATE minute-grained window
+    # so a crashed render doesn't sit in 'rendering' forever (audit 2026-05-08:
+    # chat 996550924327 was stuck for two days).
+    assert "status = 'rendering'" in query
+    assert "minutes" in query
+    assert args == ("24", "30")

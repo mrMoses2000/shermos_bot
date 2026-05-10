@@ -244,6 +244,8 @@ async def insert_outbound_event(
             idempotency_key
         )
         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+        ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+        DO NOTHING
         RETURNING id
         """,
         chat_id,
@@ -605,26 +607,43 @@ async def abandon_current_order_draft(pool, chat_id: int, cancel_order: bool = T
     return draft
 
 
-async def abandon_stale_order_drafts(pool, *, max_age_hours: int = 24) -> int:
-    """Mark order_drafts in 'collecting'/'confirming' stuck for >max_age_hours
-    as abandoned. Without this, drafts from clients who lost interest pile
-    up forever and confuse downstream queries that look for active drafts.
+async def abandon_stale_order_drafts(
+    pool,
+    *,
+    max_age_hours: int = 24,
+    rendering_max_age_minutes: int = 30,
+) -> int:
+    """Mark order_drafts stuck in non-terminal states as abandoned.
 
-    Excludes 'rendering' — that one is short-lived and self-corrects when
-    the render finishes.
+    Two distinct windows:
+    - 'collecting' / 'confirming': abandoned clients (default 24h since last
+      activity).
+    - 'rendering': should be short-lived (5 min Blender timeout). If we still
+      see one >30 min old, the render task crashed without clearing the
+      status — the draft would otherwise sit there forever and block
+      get_active_order_draft from picking up a fresh attempt for the same
+      chat. Witnessed in the audit on 2026-05-08 (chat 996550924327 stuck in
+      mode='rendering' for two days).
     """
     return await pool.fetchval(
         """
         WITH abandoned AS (
             UPDATE order_drafts
             SET status='abandoned', updated_at=now()
-            WHERE status IN ('collecting', 'confirming')
-              AND updated_at < now() - ($1 || ' hours')::interval
+            WHERE (
+                  status IN ('collecting', 'confirming')
+                  AND updated_at < now() - ($1 || ' hours')::interval
+              )
+               OR (
+                  status = 'rendering'
+                  AND updated_at < now() - ($2 || ' minutes')::interval
+              )
             RETURNING 1
         )
         SELECT COUNT(*)::int FROM abandoned
         """,
         str(max_age_hours),
+        str(rendering_max_age_minutes),
     )
 
 
