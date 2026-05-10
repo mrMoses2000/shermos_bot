@@ -368,10 +368,18 @@ def _create_wall_segment(width, height, rows, cols, frame_thickness, vertical_mu
     frame_parts = []
     glass_panes = []
 
-    # Внешняя рама
-    frame_parts.append(trimesh.creation.box(bounds=[[0, 0, -FRAME_THICKNESS/2], [width, FRAME_THICKNESS, FRAME_THICKNESS/2]]))
-    frame_parts.append(trimesh.creation.box(bounds=[[0, height - FRAME_THICKNESS, -FRAME_THICKNESS/2], [width, height, FRAME_THICKNESS/2]]))
+    # Внешняя рама. ВАЖНО: вертикальные стойки имеют полную высоту,
+    # а горизонтальные рейки укорочены до внутреннего пролёта (между
+    # стойками). Иначе рейки и стойки занимают один и тот же объём в
+    # углах — pyrender показывает это как z-fighting (видны двойные
+    # рёбра / "бугорки" в углах рамы — пожаловались на 2026-05-10).
+    # Bottom rail (between posts):
+    frame_parts.append(trimesh.creation.box(bounds=[[FRAME_THICKNESS, 0, -FRAME_THICKNESS/2], [width - FRAME_THICKNESS, FRAME_THICKNESS, FRAME_THICKNESS/2]]))
+    # Top rail (between posts):
+    frame_parts.append(trimesh.creation.box(bounds=[[FRAME_THICKNESS, height - FRAME_THICKNESS, -FRAME_THICKNESS/2], [width - FRAME_THICKNESS, height, FRAME_THICKNESS/2]]))
+    # Left post (full height — owns the two left corners):
     frame_parts.append(trimesh.creation.box(bounds=[[0, 0, -FRAME_THICKNESS/2], [FRAME_THICKNESS, height, FRAME_THICKNESS/2]]))
+    # Right post (full height — owns the two right corners):
     frame_parts.append(trimesh.creation.box(bounds=[[width - FRAME_THICKNESS, 0, -FRAME_THICKNESS/2], [width, height, FRAME_THICKNESS/2]]))
 
     # Используем max(1, ...), чтобы ввод 0 обрабатывался как 1 большая панель.

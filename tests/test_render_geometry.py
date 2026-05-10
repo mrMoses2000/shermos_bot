@@ -156,3 +156,43 @@ def test_create_handle_position_left_center_right_are_distinct():
     # And spread should be at least half the section width — guards against a
     # regression where the offset coefficient gets tiny.
     assert avg["Право"] - avg["Лево"] > 0.7, f"Spread too small: {avg}"
+
+
+def test_outer_frame_corners_do_not_overlap():
+    """Regression: top/bottom rails must not extend into the corners owned
+    by the left/right posts. Coincident cuboids at the same Z range cause
+    z-fighting in pyrender (visible as doubled edges / corner bumps —
+    reported by a client on 2026-05-10).
+
+    Volume sanity: a 1×1-section frame should have exactly the volume of
+    two posts (full height) + two interior-span rails. If rails extended
+    full-width again, the corners would be double-covered and total volume
+    would shrink (because trimesh deduplicates overlapping geometry on
+    concatenation), or stay the same with z-fighting at runtime — either
+    way the expected-vs-actual comparison fails.
+    """
+    width = 2.0
+    height = 2.4
+    thickness = 0.04
+    frame, _glass, _handle = create_partition.create_partition_mesh(
+        {
+            "shape": "Прямая",
+            "height": height,
+            "width_a": width,
+            "rows": 1,
+            "cols": 1,
+            "frame_thickness": thickness,
+            "frame_color": [0.1, 0.1, 0.1, 1],
+            "glass_color": [0.8, 0.9, 1.0, 0.3],
+        }
+    )
+    expected_volume = (
+        # Two posts, full height
+        2 * thickness * height * thickness
+        # Two rails, interior width only
+        + 2 * (width - 2 * thickness) * thickness * thickness
+    )
+    assert frame.volume == pytest.approx(expected_volume, rel=0.01), (
+        f"Frame volume {frame.volume:.6f} differs from non-overlapping "
+        f"expectation {expected_volume:.6f} — corners likely overlap again."
+    )
