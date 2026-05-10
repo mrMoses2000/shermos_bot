@@ -86,6 +86,44 @@ async def get_order_details(pg_pool, args: dict[str, Any]) -> str:
     )
 
 
+async def confirm_measurement(pg_pool, args: dict[str, Any]) -> str:
+    """Confirm a measurement on the master's behalf (sets status='confirmed').
+
+    Pairs with the auto-confirm fallback: if the master doesn't react within
+    15 min the measurement auto-confirms anyway, but a manual confirmation
+    short-circuits that and gives the client a definitive answer faster.
+    """
+    raw_id = args.get("measurement_id")
+    if raw_id in (None, ""):
+        # Fall back to the single active measurement if there is exactly one.
+        upcoming = await postgres.list_measurements(pg_pool, upcoming_only=True, limit=2)
+        if len(upcoming) == 1:
+            mid = int(upcoming[0]["id"])
+        elif not upcoming:
+            return "Активных замеров нет — нечего подтверждать."
+        else:
+            return (
+                "Не понял, какой замер подтвердить — у нас несколько активных. "
+                "Уточни номер: «подтверди замер 5»."
+            )
+    else:
+        try:
+            mid = int(raw_id)
+        except (TypeError, ValueError):
+            return "Не понял номер замера."
+
+    from src.engine.measurement_service import update_measurement_status
+    try:
+        m = await update_measurement_status(
+            pg_pool, mid, "confirmed", reason="Подтверждён мастером",
+        )
+    except ValueError as exc:
+        return f"Не удалось подтвердить замер #{mid}: {exc}"
+    from src.utils.datetime_format import fmt_local
+    when = fmt_local(m["scheduled_time"])
+    return f"✅ Замер #{mid} ({when}) подтверждён."
+
+
 async def cancel_measurement(pg_pool, args: dict[str, Any]) -> str:
     try:
         mid = int(args.get("measurement_id"))
@@ -179,6 +217,7 @@ TOOLS = {
     "list_recent_orders": list_recent_orders,
     "list_upcoming_measurements": list_upcoming_measurements,
     "get_order_details": get_order_details,
+    "confirm_measurement": confirm_measurement,
     "cancel_measurement": cancel_measurement,
     "propose_reschedule": propose_reschedule,
 }

@@ -1067,20 +1067,22 @@ async def process_manager_job(
                 tool = parsed.get("tool")
                 args = parsed.get("args") or {}
                 comment = parsed.get("comment", "")
-                # Auto-resolve measurement_id for propose_reschedule / cancel_measurement
-                # when LLM left it blank but only one active measurement exists.
-                if tool in ("propose_reschedule", "cancel_measurement") and not args.get("measurement_id"):
+                # Auto-resolve measurement_id for propose_reschedule / cancel_measurement /
+                # confirm_measurement when LLM left it blank but only one active
+                # measurement exists.
+                if tool in ("propose_reschedule", "cancel_measurement", "confirm_measurement") and not args.get("measurement_id"):
                     if len(active_meas) == 1:
                         args["measurement_id"] = int(active_meas[0]["id"])
                         logger.info("manager_nl_auto_resolved_measurement_id", extra={"id": args["measurement_id"], "tool": tool})
                 if tool == "unknown" or not tool:
                     reply = (
                         "Не понял команду. Попробуй так:\n"
+                        "• «подтверждаю» / «подтверди замер 5»\n"
+                        "• «отклоняю» / «отмени замер 5»\n"
+                        "• «перенеси замер 5 на 14:00»\n"
                         "• «покажи последние заказы»\n"
                         "• «замеры на завтра»\n"
                         "• «детали заказа 2fdb6a4b»\n"
-                        "• «отмени замер 5»\n"
-                        "• «перенеси замер 5 на 14:00»\n"
                         "Или используй /orders, /measurements, /health."
                     )
                 else:

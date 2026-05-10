@@ -59,6 +59,81 @@ async def test_cancel_measurement_invalid_id():
 
 
 @pytest.mark.asyncio
+async def test_confirm_measurement_with_explicit_id(monkeypatch):
+    """Master says 'подтверди замер 5' — tool flips status to 'confirmed'."""
+    async def fake_update(_pool, mid, status, reason=""):
+        assert status == "confirmed"
+        return {"id": mid, "scheduled_time": datetime(2026, 5, 12, 15, 0, tzinfo=tz_mod.utc)}
+
+    monkeypatch.setattr(
+        "src.engine.measurement_service.update_measurement_status", fake_update,
+    )
+    out = await manager_tools.confirm_measurement(object(), {"measurement_id": 5})
+    assert "✅" in out
+    assert "#5" in out
+    assert "подтверждён" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_confirm_measurement_falls_back_to_single_active(monkeypatch):
+    """No measurement_id provided + only one active → use it. This is the
+    'подтверждаю' shortcut right after a new-measurement notification."""
+    async def fake_list(_pool, **_kwargs):
+        return [{"id": 7}]
+
+    async def fake_update(_pool, mid, status, reason=""):
+        assert mid == 7
+        return {"id": mid, "scheduled_time": datetime(2026, 5, 12, 15, 0, tzinfo=tz_mod.utc)}
+
+    monkeypatch.setattr(manager_tools.postgres, "list_measurements", fake_list)
+    monkeypatch.setattr(
+        "src.engine.measurement_service.update_measurement_status", fake_update,
+    )
+
+    out = await manager_tools.confirm_measurement(object(), {})
+    assert "#7" in out
+    assert "подтверждён" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_confirm_measurement_ambiguous_when_multiple_active(monkeypatch):
+    """No id + multiple active → asks the master to specify."""
+    async def fake_list(_pool, **_kwargs):
+        return [{"id": 1}, {"id": 2}]
+
+    monkeypatch.setattr(manager_tools.postgres, "list_measurements", fake_list)
+
+    out = await manager_tools.confirm_measurement(object(), {})
+    assert "несколько активных" in out.lower()
+    assert "подтверди замер" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_confirm_measurement_no_active_returns_friendly_message(monkeypatch):
+    async def fake_list(_pool, **_kwargs):
+        return []
+
+    monkeypatch.setattr(manager_tools.postgres, "list_measurements", fake_list)
+
+    out = await manager_tools.confirm_measurement(object(), {})
+    assert "нечего подтверждать" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_routes_confirm_measurement_to_tool():
+    """confirm_measurement must be in the TOOLS dispatch table."""
+    assert "confirm_measurement" in manager_tools.TOOLS
+
+
+def test_manager_prompt_documents_confirm_tool():
+    """The system prompt must list confirm_measurement so Gemini knows to
+    pick it for 'подтверждаю' / 'подтверди замер N'."""
+    p = build_manager_prompt("подтверждаю")
+    assert "confirm_measurement" in p
+    assert "подтверждаю" in p
+
+
+@pytest.mark.asyncio
 async def test_propose_reschedule_creates_client_outbox(monkeypatch):
     """propose_reschedule tool produces a client outbox row + master receipt."""
     outbox_rows = []
