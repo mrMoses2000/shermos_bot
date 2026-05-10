@@ -28,7 +28,12 @@ class Settings(BaseSettings):
     llm_cli_command: str = "gemini"
     llm_cli_flags: str = "-p"
     max_llm_concurrency: int = 2
-    llm_timeout_seconds: int = 90
+    # 180s gives Gemini enough headroom for the long-context calls we see in
+    # chats with 80+ messages + memory summary. The previous 90s ceiling was
+    # already being grazed (multiple ~46s observations) and pushed a real
+    # client into the timeout path on 2026-05-10 with an open-ended "помоги
+    # выбрать" voice message.
+    llm_timeout_seconds: int = 180
 
     timezone: str = "Asia/Bishkek"
 

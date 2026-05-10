@@ -126,9 +126,19 @@ async def call_llm(prompt: str) -> str:
             raise TimeoutError("Gemini CLI timed out") from exc
 
         duration = time.perf_counter() - exec_start
-        logger.info(
+        # Surface near-timeouts as a WARNING so we see degradation trends
+        # before clients hit the actual ceiling. Threshold = 70% of the
+        # configured timeout — chosen to give us roughly a 30% headroom
+        # alarm window.
+        timeout_s = settings.llm_timeout_seconds
+        log_level = logger.warning if duration >= timeout_s * 0.7 else logger.info
+        log_level(
             "llm_call_finished",
-            extra={"t_wait_llm": round(waited, 3), "t_exec_llm": round(duration, 3)},
+            extra={
+                "t_wait_llm": round(waited, 3),
+                "t_exec_llm": round(duration, 3),
+                "timeout_s": timeout_s,
+            },
         )
         if process.returncode != 0:
             llm_call_duration_seconds.labels(status="error").observe(duration)
