@@ -164,6 +164,7 @@ async def apply_actions(
             missing = missing_render_params(normalized)
 
             is_reusable = False
+            changed_keys: list[str] = []
             if existing_order and not missing:
                 try:
                     params = RenderPartitionAction(**normalized)
@@ -175,9 +176,25 @@ async def apply_actions(
                         old_val = old_details.get(key)
                         if curr_val != old_val and str(curr_val) != str(old_val):
                             is_reusable = False
-                            break
+                            changed_keys.append(key)
                 except Exception:
                     is_reusable = False
+
+            # Telemetry: when Gemini drives a re-render, log which geometry
+            # fields actually changed vs the previous order. Lets us spot
+            # cases where the LLM mutated a param the client didn't ask
+            # about (e.g. 2026-05-12 chat 996550924327: glass_type went
+            # 1→2 on a bare "Ок" — the previous render got duplicated
+            # silently). Diff-only payload is small enough for journals.
+            if existing_order and changed_keys:
+                logger.info(
+                    "render_geometry_diff",
+                    extra={
+                        "chat_id": chat_id,
+                        "request_id": existing_order["request_id"],
+                        "changed_keys": changed_keys,
+                    },
+                )
 
             if is_reusable:
                 logger.info(

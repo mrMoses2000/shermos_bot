@@ -339,6 +339,92 @@ async def test_render_reuse_rejects_stale_rendered_order_when_params_changed(mon
 
 
 @pytest.mark.asyncio
+async def test_render_geometry_diff_is_logged_with_changed_keys(monkeypatch, caplog):
+    """Telemetry: when Gemini's render_partition args differ from the previous
+    rendered order, we log exactly which geometry fields changed. This lets
+    ops spot cases where the LLM mutated a param the client didn't ask for
+    (e.g. 2026-05-12 chat 996550924327: glass_type went 1→2 on a bare 'Ок').
+    """
+    import logging
+
+    async def fake_render_partition(*_args, **_kwargs):
+        return {"render_paths": {"0deg": "/tmp/new.png"}}
+
+    async def fake_create_order(*_args, **_kwargs):
+        return {"request_id": "new-order"}
+
+    async def fake_get_rendered_draft(_pool, chat_id):
+        return {
+            "request_id": "draft-1",
+            "chat_id": 10,
+            "status": "rendered",
+            "rendered_order_id": "order-1",
+            "order_status": "new",
+            "details_json": {
+                "shape": "Прямая", "height": 2.5, "width_a": 3,
+                "partition_type": "sliding_2", "glass_type": "1",
+                "frame_color": "1", "matting": "none",
+                "add_handle": False, "rows": 1, "cols": 2,
+            },
+            "render_paths": {"0deg": "/tmp/a.png"},
+            "price": {"total_price": 100, "currency": "USD"},
+            "collected_params": {"shape": "Прямая"},
+        }
+
+    async def _noop(*_a, **_k): return None
+    async def _passthrough(*_a, **_k): return {"request_id": "draft-1"}
+
+    monkeypatch.setattr(actions_applier, "render_partition", fake_render_partition)
+    monkeypatch.setattr(actions_applier.postgres, "create_order", fake_create_order)
+    monkeypatch.setattr(actions_applier.postgres, "get_rendered_order_draft", fake_get_rendered_draft)
+    monkeypatch.setattr(actions_applier.postgres, "get_active_order_draft", _passthrough)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_conversation_state", _noop)
+    monkeypatch.setattr(actions_applier.postgres, "upsert_order_draft", _noop)
+    monkeypatch.setattr(actions_applier.postgres, "mark_active_order_draft_rendered", _noop)
+    monkeypatch.setattr(actions_applier.pricing_cache, "reload", _noop)
+    monkeypatch.setattr(actions_applier, "calculate_price",
+                        lambda *a, **k: {"total_price": 200, "currency": "USD"})
+    monkeypatch.setattr(actions_applier.postgres, "insert_outbound_event", _noop)
+
+    actions = ActionsJson(
+        reply_text="ok",
+        actions={
+            "render_partition": {
+                "shape": "Прямая", "height": 2.5, "width_a": 3,
+                "partition_type": "sliding_2",
+                "glass_type": "2",       # <-- mutated by Gemini without client asking
+                "frame_color": "1", "matting": "none",
+                "add_handle": False, "rows": 1, "cols": 2,
+            },
+            "state_patch": {"mode": "rendering", "step": "ask_time",
+                            "collected_params": {"_rendered_order_id": "order-1"}},
+        },
+    )
+    # Make caplog see the actions_applier logger (setup_logger sets propagate=False)
+    import logging as _logging
+    log = _logging.getLogger("src.llm.actions_applier")
+    prev = log.propagate
+    log.propagate = True
+    try:
+        with caplog.at_level(_logging.INFO, logger="src.llm.actions_applier"):
+            await actions_applier.apply_actions(
+                actions, 10, None,
+                {"mode": "rendering",
+                 "collected_params": {"_rendered_order_id": "order-1"}},
+                object(), object(),
+                SimpleNamespace(manager_whatsapp_numbers_list=[]),
+            )
+    finally:
+        log.propagate = prev
+
+    diff_records = [r for r in caplog.records if r.message == "render_geometry_diff"]
+    assert diff_records, "Expected a render_geometry_diff telemetry record"
+    rec = diff_records[-1]
+    assert getattr(rec, "chat_id", None) == 10
+    assert "glass_type" in getattr(rec, "changed_keys", [])
+
+
+@pytest.mark.asyncio
 async def test_apply_actions_blocks_render_until_required_fields(monkeypatch):
     calls = []
 
