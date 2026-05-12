@@ -49,7 +49,7 @@ async def create_measurement_event(
     start = _parse_start(date, time, settings.timezone)
     end = start + timedelta(hours=1)
     event_body = {
-        "summary": f"Замер Shermos: {client_name}",
+        "summary": f"Замер «Мир Стекла»: {client_name}",
         "description": f"Клиент: {client_name}\nТелефон: {phone}\nАдрес: {address}",
         "location": address,
         "start": {"dateTime": start.isoformat(), "timeZone": settings.timezone},

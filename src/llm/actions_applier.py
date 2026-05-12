@@ -275,7 +275,7 @@ async def apply_actions(
                     system_collected_patch["_rendered_order_id"] = request_id
 
                     _new_order_text = (
-                        "<b>Новый расчёт Shermos</b>\n"
+                        "<b>Новый расчёт «Мир Стекла»</b>\n"
                         f"Заказ: <code>{request_id}</code>\n"
                         f"Клиент chat_id: <code>{chat_id}</code>\n"
                         f"Сумма: <b>{price['total_price']} {price['currency']}</b>"
